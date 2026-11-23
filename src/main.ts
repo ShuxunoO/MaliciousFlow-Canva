@@ -189,6 +189,7 @@ function render(fit = false, focus?: string, refreshInspector = true): Promise<v
 function openCase(next: CaseData) {
   investigation?.abort()
   investigation = undefined
+  cancelDrag()
   chatRequest++
   data = next
   exitLinkMode()
@@ -1005,23 +1006,34 @@ Object.assign(window, {
 })
 
 graph.on('aftertransform', updateHandle)
-let dragging: { id: string; axis: 0 | 1; start: number } | undefined
+let dragging: { id: string; axis: 0 | 1; start: number; pointerId: number } | undefined
 const handle = $('handle')
 handle.onpointerdown = event => {
   if (selection?.type !== 'edge') return
   event.preventDefault()
   handle.setPointerCapture(event.pointerId)
   const axis = handle.dataset.axis === 'x' ? 0 : 1
-  dragging = { id: selection.id, axis, start: graph.getCanvasByClient([event.clientX, event.clientY])[axis] }
+  dragging = { id: selection.id, axis, pointerId: event.pointerId, start: graph.getCanvasByClient([event.clientX, event.clientY])[axis] }
 }
 handle.onpointerup = event => {
-  if (!dragging) return
+  if (!dragging || dragging.pointerId !== event.pointerId) return
   const { id, axis, start } = dragging
   dragging = undefined
   const distance = graph.getCanvasByClient([event.clientX, event.clientY])[axis] - start
   if (Math.abs(distance) > 1) edit(edits => { edits.bends[id] = (edits.bends[id] ?? 0) + distance })
 }
-handle.onpointercancel = () => { dragging = undefined }
+function cancelDrag() {
+  const pointerId = dragging?.pointerId
+  dragging = undefined
+  if (pointerId !== undefined && handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId)
+}
+
+handle.onpointercancel = cancelDrag
+handle.onlostpointercapture = cancelDrag
+window.addEventListener('blur', cancelDrag)
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') cancelDrag()
+})
 
 openCase(demo)
 void loadCase().then(saved => { if (saved && !openedByUser) openCase(saved) }).catch(() => {})

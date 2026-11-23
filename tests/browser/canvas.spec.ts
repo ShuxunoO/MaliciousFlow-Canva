@@ -120,3 +120,26 @@ test('adds a collected transaction from outside the current case view without qu
   await page.reload()
   await expect(page.locator('#status')).toContainText('2 transfers')
 })
+
+test('discards a cancelled edge drag and accepts the next drag', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
+  await page.evaluate(() => (window as any).maliciousFlow.set_view('D-3'))
+  const handle = page.getByRole('button', { name: 'Drag transaction edge' })
+  const box = (await handle.boundingBox())!
+  const x = box.x + box.width / 2
+  const y = box.y + box.height / 2
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.keyboard.press('Escape')
+  await page.mouse.move(x + 30, y + 30)
+  await page.mouse.up()
+  const bends = () => page.evaluate(() =>
+    Object.keys(JSON.parse(localStorage.getItem('flow-edits:canvas-workshop') ?? '{}').value?.bends ?? {}).length)
+  expect(await bends()).toBe(0)
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x + 40, y + 40)
+  await page.mouse.up()
+  await expect.poll(bends).toBe(1)
+})
