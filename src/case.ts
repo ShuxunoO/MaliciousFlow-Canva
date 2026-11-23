@@ -19,6 +19,8 @@ export interface Transfer {
   assetId: string
   amount: string
   evidence?: string
+  verification?: string
+  rawAmount?: string
   sources?: string[]
   note?: string
   usd?: string
@@ -179,7 +181,10 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
     for (const node of data.addresses) if (!connected.has(node.id)) visible.add(mapping.get(node.id) ?? node.id)
   }
   if (filters.address && nodes.has(filters.address)) visible.add(mapping.get(filters.address) ?? filters.address)
-  for (const id of hidden) if (nodes.has(id.slice(0, -3))) visible.add(id.slice(0, -3))
+  for (const key of hidden) {
+    const id = key.slice(0, key.lastIndexOf(':'))
+    if (nodes.has(id)) visible.add(id)
+  }
   if (reveal && nodes.has(reveal)) visible.add(mapping.get(reveal) ?? reveal)
   return { nodes: [...visible].map(id => nodes.get(id)).filter((node): node is FlowNode => !!node), edges: [...groups.values()], count }
 }

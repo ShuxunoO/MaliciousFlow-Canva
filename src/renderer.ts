@@ -1,11 +1,27 @@
 import { BaseEdge, CanvasEvent, EdgeEvent, ExtensionCategory, Graph, NodeEvent, Rect, register } from '@antv/g6'
-import type { BaseEdgeStyleProps, GraphData } from '@antv/g6'
+import type { BaseEdgeStyleProps, GraphData, RectStyleProps } from '@antv/g6'
 import type { Edits, FlowView, Point } from './case'
 import { NODE_HEIGHT, NODE_WIDTH, type Drawing, type Route } from './layout'
 
-export class BaseFlowNode extends Rect {}
+interface FlowNodeStyle extends RectStyleProps { title: string; address: string; summary: string; accent: string }
+
+export class BaseFlowNode extends Rect {
+  protected drawLabelShape(attributes: Required<FlowNodeStyle>, container: NonNullable<Parameters<Rect['render']>[1]>) {
+    const { title, address, summary, accent } = attributes
+    this.upsert('role-icon', 'circle', { cx: -87, cy: -23, r: 10, fill: accent, opacity: .92 }, container)
+    this.upsert('role-glyph', 'text', { x: -87, y: -23, text: this.glyph, fill: '#101d24', fontSize: 11,
+      fontWeight: 700, textBaseline: 'middle', textAlign: 'center' }, container)
+    this.upsert('title', 'text', { x: -69, y: -22, text: title, fill: '#e9f5f3', fontSize: 15,
+      fontWeight: 650, textBaseline: 'middle' }, container)
+    this.upsert('address', 'text', { x: -91, y: 5, text: address, fill: '#9cb8be', fontSize: 11,
+      fontFamily: 'monospace', textBaseline: 'middle' }, container)
+    this.upsert('summary', 'text', { x: -91, y: 28, text: summary, fill: '#add5cf', fontSize: 11, textBaseline: 'middle' }, container)
+  }
+
+  protected glyph = '•'
+}
 class AddressNode extends BaseFlowNode {}
-class EntityNode extends BaseFlowNode {}
+class EntityNode extends BaseFlowNode { protected glyph = '∴' }
 
 interface FlowStyle extends BaseEdgeStyleProps { route: Route }
 
@@ -72,9 +88,9 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, select
         style: {
           x, y, size: [NODE_WIDTH, NODE_HEIGHT], radius: 13, fill: '#172830',
           stroke: node.color && /^#[a-f\d]{6}$/i.test(node.color) ? node.color : '#5c8d89', lineWidth: 1.4,
-          labelText: [node.name.slice(0, 22), short, details].join('\n'),
-          labelPlacement: 'center', labelFill: '#e1eeed', labelFontSize: 12, labelLineHeight: 21,
-          labelWordWrap: true, labelMaxWidth: 200, cursor: 'grab',
+          title: Array.from(node.name).slice(0, 13).join(''), address: short,
+          summary: Array.from(details).slice(0, 25).join(''),
+          accent: node.color && /^#[a-f\d]{6}$/i.test(node.color) ? node.color : '#69c8a9', cursor: 'grab',
         },
       }
     }),

@@ -1,7 +1,9 @@
-import { History, latestBalances, project, sumDecimal, transact } from './case'
+import { History, latestBalances, project, sumDecimal } from './case'
 import type { CaseData, Edits, Filters, FlowEdge, Point } from './case'
+import { importCase } from './import-case'
+import { loadCase, saveCase } from './storage'
 import { demo } from './demo'
-import { layout } from './layout'
+import { layout, NODE_HEIGHT, NODE_WIDTH } from './layout'
 import { graphData, makeGraph, type Selection } from './renderer'
 import './style.css'
 
@@ -13,7 +15,7 @@ app.innerHTML = `
     </div></div>
     <div class="toolbar">
       <button id="demo">示例</button><button id="import">导入案件</button>
-      <input type="file" id="case-file" accept="application/json,.json" hidden>
+      <input type="file" id="case-file" accept="application/json,.json" multiple hidden>
       <button id="undo">撤销</button><button id="redo">重做</button><button id="report-toggle" aria-pressed="true">报告</button>
     </div>
   </header>
@@ -54,6 +56,7 @@ let view = project(data, history.value)
 let drawing = layout(view)
 let queue: Promise<void> = Promise.resolve()
 let draftOpen = false
+let openedByUser = false
 const graph = makeGraph($('graph'), setSelection, (id, point) => edit(edits => { edits.positions[id] = point }), () => selection)
 const status = (text: string) => { $('status').textContent = text }
 
@@ -106,7 +109,10 @@ function render(fit = false, focus?: string): Promise<void> {
     graph.setData(graphData(view, drawing, history.value, selection))
     await graph.render()
     if (fit && view.nodes.length) await graph.fitView()
-    if (focus) await graph.focusElement(focus)
+    if (focus) {
+      if (graph.getZoom() < .62) await graph.zoomTo(.62)
+      await graph.focusElement(focus)
+    }
     $('empty').hidden = !!view.nodes.length
     $('graph').dataset.nodes = String(view.nodes.length)
     $('graph').dataset.edges = String(view.edges.length)
@@ -146,7 +152,7 @@ function eventRows(edge: FlowEdge): string {
       <strong>${esc(item.amount)} ${esc(item.asset)}</strong>
       <div class="subtle">${esc(item.time)}${item.usd ? ' · $' + esc(item.usd) : ''}</div>
       <code class="mono">${esc(item.hash)}</code>
-      <div class="subtle">${esc(item.sources?.join(' · '))}</div>
+      <div class="subtle">${esc(item.sources?.join(' · '))}${item.verification ? ' · ' + esc(item.verification) : ''}</div>
       ${item.evidence ? `<button class="ref" data-report="${esc(item.evidence)}">证据 ${esc(item.evidence)}</button>` : ''}
       <label>交易备注<textarea data-note="${esc(item.id)}">${esc(history.value.notes[item.id] ?? item.note)}</textarea></label>
     </div>`).join('')
@@ -180,7 +186,7 @@ function renderSelection() {
       <label>名称<input data-name="${esc(node.id)}" value="${esc(node.name)}"></label>
       <label>节点备注<textarea data-note="${esc(node.id)}">${esc(history.value.notes[node.id])}</textarea></label>
       <div class="actions"><button data-direction="in">${hidden.has(node.id + ':in') ? '展开' : '收起'}流入</button><button data-direction="out">${hidden.has(node.id + ':out') ? '展开' : '收起'}流出</button></div>
-      <div class="actions">${node.members ? '<button data-ungroup>解除分组</button>'
+      <div class="actions"><button data-neighbors>仅看关联</button>${node.members ? '<button data-ungroup>解除分组</button>'
         : '<button data-group>归入实体</button><button data-link>添加关系线</button>'}</div>
     </div>`
   }
@@ -256,17 +262,32 @@ $('reset').onclick = () => {
   hidden.clear()
   applyFilters()
 }
-$('demo').onclick = () => openCase(demo)
+$('demo').onclick = () => {
+  openedByUser = true
+  openCase(demo)
+  void saveCase().catch(() => status('无法清除已保存的案件'))
+}
 $('import').onclick = () => $('case-file').click()
 $('case-file').addEventListener('change', async event => {
   const input = event.target as HTMLInputElement
   try {
-    const file = input.files?.[0]
-    if (file) {
-      const raw = JSON.parse(await file.text())
-      if (!raw.id || !raw.title || !Array.isArray(raw.addresses) || !Array.isArray(raw.transfers)) throw new Error('案件格式无效')
-      openCase(transact({ ...raw, addresses: [], transfers: [], balances: [] }, raw))
-    }
+    const files = [...(input.files ?? [])]
+    if (!files.length) return
+    openedByUser = true
+    const payloads = await Promise.all(files.map(async file => JSON.parse(await file.text())))
+    const raw = payloads.find(item => item && (Array.isArray(item.addresses) && Array.isArray(item.transfers)
+      || Array.isArray(item.nodes) && Array.isArray(item.events)))
+    const report = payloads.find(item => item !== raw && Array.isArray(item?.chapters))
+    const chapters = report?.chapters.map((chapter: { id: string; title: string; lede?: string; blocks?: { html?: string }[] }) => {
+      const html = (chapter.blocks ?? []).map(block => block.html ?? '').join(' ')
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      const refs = [...doc.querySelectorAll('a[href^="#ex-"]')].map(link => link.getAttribute('href')!.slice(4))
+      const lede = new DOMParser().parseFromString(chapter.lede ?? '', 'text/html').body.textContent ?? ''
+      return { id: chapter.id, title: chapter.title, text: lede, refs: [...new Set(refs)] }
+    })
+    const next = importCase(raw, chapters)
+    openCase(next)
+    await saveCase(next)
   } catch (error) {
     status(error instanceof Error ? error.message : String(error))
   } finally {
@@ -336,6 +357,11 @@ document.addEventListener('click', event => {
     else hidden.add(key)
     revealed = undefined
     void render()
+  }
+  if (button.hasAttribute('data-neighbors') && selection) {
+    filters.address = selection.id
+    revealed = undefined
+    void render(true)
   }
   if (button.hasAttribute('data-group') && selection) {
     const name = prompt('实体名称')?.trim()
@@ -410,6 +436,7 @@ handle.onpointerup = event => {
 handle.onpointercancel = () => { dragging = undefined }
 
 openCase(demo)
+void loadCase().then(saved => { if (saved && !openedByUser) openCase(saved) }).catch(() => {})
 
 export function canvasCoordinates(id: string): Point | undefined {
   const point = drawing.positions[id] ?? drawing.routes[id]?.label
@@ -418,4 +445,17 @@ export function canvasCoordinates(id: string): Point | undefined {
   return [x, y]
 }
 
-if (import.meta.env.DEV) Object.assign(window, { flowCanvas: { canvasCoordinates } })
+function inspectDrawing() {
+  return {
+    nodes: view.nodes.map(node => ({
+      id: node.id,
+      box: [drawing.positions[node.id][0] - NODE_WIDTH / 2, drawing.positions[node.id][1] - NODE_HEIGHT / 2, NODE_WIDTH, NODE_HEIGHT],
+    })),
+    edges: graph.getData().edges?.map(edge => {
+      const route = drawing.routes[edge.id!]
+      return { id: edge.id, source: edge.source, target: edge.target, points: route.points, path: route.path, blocked: route.blocked }
+    }) ?? [],
+  }
+}
+
+if (import.meta.env.DEV) Object.assign(window, { flowCanvas: { canvasCoordinates, inspectDrawing } })
