@@ -106,3 +106,13 @@ it('keeps an unobstructed route on incremental layout and reroutes an invalidate
   expect(updated.routes[moved.id].points.at(-1)).not.toEqual(initial.routes[moved.id].points.at(-1))
   expect(updated.routes[moved.id].blocked).toBe(false)
 })
+
+it('includes a collected transaction outside the core view while respecting asset and time filters', () => {
+  const edits = emptyEdits()
+  const data = { ...demo, core: ['demo-0'] }
+  expect(project(data, edits, { core: true }).count).toBe(1)
+  edits.included = ['demo-5']
+  expect(project(data, edits, { core: true }).count).toBe(2)
+  expect(project(data, edits, { core: true, to: '2020-09-26' }).count).toBe(1)
+  expect(project(data, edits, { core: true, asset: '2:token' }).count).toBe(0)
+})

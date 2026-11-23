@@ -73,6 +73,7 @@ export interface Edits {
   entities: Entity[]
   relations: Relation[]
   drafts: Draft[]
+  included?: string[]
   conclusions?: Record<string, Conclusion>
 }
 
@@ -151,6 +152,7 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
   }
   const filterAddresses = filters.address ? new Set([filters.address,
     ...(edits.entities.find(entity => entity.id === filters.address)?.members ?? [])]) : undefined
+  const included = new Set(edits.included ?? [])
   const groups = new Map<string, FlowEdge>()
   const visible = new Set<string>()
   const from = filters.from ? Date.parse(filters.from) : -Infinity
@@ -161,7 +163,7 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
     const target = mapping.get(event.target) ?? event.target
     const forced = event.id === reveal || event.evidence === reveal && !!reveal
     const time = Date.parse(event.time)
-    if (!forced && ((core && !core.has(event.id)) || (filters.asset && event.assetId !== filters.asset)
+    if (!forced && ((core && !core.has(event.id) && !included.has(event.id)) || (filters.asset && event.assetId !== filters.asset)
       || time < from || time >= to || (filterAddresses && ![event.source, event.target, source, target].some(id => filterAddresses.has(id)))
       || hidden.has(source + ':out') || hidden.has(target + ':in'))) continue
     count++
@@ -197,6 +199,9 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
   for (const key of hidden) {
     const id = key.slice(0, key.lastIndexOf(':'))
     if (nodes.has(id)) visible.add(id)
+  }
+  for (const id of included) {
+    if (nodes.has(id) && (!filterAddresses || filterAddresses.has(id))) visible.add(mapping.get(id) ?? id)
   }
   if (reveal && nodes.has(reveal)) visible.add(mapping.get(reveal) ?? reveal)
   return { nodes: [...visible].map(id => nodes.get(id)).filter((node): node is FlowNode => !!node), edges: [...groups.values()], count }

@@ -105,3 +105,18 @@ test('restores undo and redo after a browser reload', async ({ page }) => {
   await page.getByRole('button', { name: 'Redo', exact: true }).click()
   await expect(title).toHaveValue('Saved investigation')
 })
+
+test('adds a collected transaction from outside the current case view without querying a provider', async ({ page }) => {
+  const demo = (await import('../../src/demo')).demo
+  await page.goto('/')
+  await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
+  await page.locator('#case-file').setInputFiles({ name: 'case.json', mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ ...demo, core: ['demo-0'] })) })
+  await expect(page.locator('#status')).toContainText('1 transfer')
+  await page.getByRole('button', { name: '+ Address / Tx' }).click()
+  await page.getByLabel('Investigation seed').fill(demo.transfers[5].hash)
+  await page.getByRole('button', { name: 'Add from case' }).click()
+  await expect(page.locator('#status')).toContainText('2 transfers')
+  await page.reload()
+  await expect(page.locator('#status')).toContainText('2 transfers')
+})

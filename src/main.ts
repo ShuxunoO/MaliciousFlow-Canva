@@ -684,7 +684,7 @@ $('agent-panel').innerHTML = `<div class="stack"><h3>Agent</h3><p id="agent-cont
       <label>Direction<select id="trace-direction"><option value="">Seed only</option><option value="upstream">Upstream</option><option value="downstream">Downstream</option></select></label>
       <label>Hops<select id="trace-hops" disabled><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></label>
     </div>
-    <div class="actions"><button id="agent-start">Collect and plot</button><button id="agent-stop" type="button" hidden>Stop</button></div>
+    <div class="actions"><button id="include-case" type="button">Add from case</button><button id="agent-start">Collect and plot</button><button id="agent-stop" type="button" hidden>Stop</button></div>
   </form></details><div class="actions"><button id="agent-analyze" type="button">Analyze selection</button><button id="agent-draft" type="button">Draft</button></div><div id="entity-preview"></div><output id="agent-progress" aria-live="polite"></output><div id="agent-messages" class="stack"></div></div>`
 $('agent-toggle').onclick = () => {
   $('agent-panel').hidden = !$('agent-panel').hidden
@@ -782,6 +782,27 @@ function selectedTransfers() {
   return view.edges.filter(item => item.source === selection?.id || item.target === selection?.id).flatMap(item => item.events)
 }
 
+function includeFromCase(input: string) {
+  const query = input.trim()
+  if (!query) throw new Error('Enter an address, transaction hash or evidence ID')
+  const id = query.toLowerCase()
+  const address = data.addresses.find(item => item.id === query || item.address.toLowerCase() === id)
+  const hits = data.transfers.filter(item => item.hash.toLowerCase() === id)
+  const evidenceItem = evidence.get(query)
+  const refs = address ? [address.id] : hits.length ? hits.map(item => item.id) : evidenceItem ? [evidenceItem.id] : []
+  if (!refs.length) throw new Error('No matching records in this case')
+  edit(edits => { edits.included = [...new Set([...(edits.included ?? []), ...refs])] })
+  return refs
+}
+
+$('include-case').onclick = () => {
+  try {
+    includeFromCase(value('agent-seed'))
+  } catch (error) {
+    updateAgentControls(error instanceof Error ? error.message : String(error))
+  }
+}
+
 $('trace-direction').addEventListener('change', () => {
   $<HTMLSelectElement>('trace-hops').disabled = !value('trace-direction')
 })
@@ -853,6 +874,7 @@ type CanvasCommand =
   | { action: 'move'; id: string; position: Point }
   | { action: 'bend'; id: string; offset: number }
   | { action: 'rename_case'; text: string }
+  | { action: 'include'; ref: string }
   | { action: 'connect'; source: string; target: string; note?: string }
   | { action: 'disconnect'; id: string }
   | { action: 'undo' | 'redo' }
@@ -955,6 +977,7 @@ Object.assign(window, {
         $<HTMLInputElement>('case-title').value = history.value.title!
         return
       }
+      if (command.action === 'include') return includeFromCase(command.ref)
       if (command.action === 'connect') return addRelationship(command.source, command.target, command.note)
       if (command.action === 'disconnect') {
         if (!history.value.relations.some(item => item.id === command.id)) throw new Error('Unknown relationship')
