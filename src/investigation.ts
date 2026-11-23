@@ -69,3 +69,14 @@ export function applyEntityMembership(edits: import('./case').Edits, name: strin
   }
   edits.entities = edits.entities.filter(entity => entity.members.length)
 }
+
+export function analysisUpdates(data: CaseData, caseId: string, afterRevision: number) {
+  if (caseId !== data.id) throw new Error('The active case changed')
+  const revision = data.analysis?.revision ?? 0
+  if (!Number.isSafeInteger(afterRevision) || afterRevision < 0 || afterRevision > revision) {
+    throw new Error('Invalid analysis revision')
+  }
+  const receipts = Object.values(data.analysis?.receipts ?? {}).map(entry => entry.receipt)
+    .filter(receipt => receipt.revision > afterRevision).sort((a, b) => a.revision - b.revision)
+  return structuredClone({ caseId, revision, receipts })
+}

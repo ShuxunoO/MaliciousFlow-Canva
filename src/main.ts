@@ -1,6 +1,6 @@
 import { History, latestBalances, project, sumDecimal } from './case'
 import type { CaseData, Draft, Edits, Filters, FlowEdge, HistorySnapshot, Point } from './case'
-import { applyAnalysis, applyEntityMembership, entityMembers, investigationSummary, type AnalysisBatch, type Receipt } from './investigation'
+import { analysisUpdates, applyAnalysis, applyEntityMembership, entityMembers, investigationSummary, type AnalysisBatch, type Receipt } from './investigation'
 import { blockscout, type Collected } from './blockscout'
 import { traceTransfers, type TraceOptions } from './trace'
 import { answerQuestion, type AgentContext, type AgentHandler } from './agent-context'
@@ -738,7 +738,7 @@ function applyBatch(batch: AnalysisBatch): Promise<Receipt> {
     renderReport()
     keepPositions = true
     await render(!view.nodes.length)
-    app.dispatchEvent(new CustomEvent('flow:analysis', { detail: result.receipt }))
+    app.dispatchEvent(new CustomEvent('flow:analysis', { detail: { ...result.receipt, caseId: current.id } }))
     return result.receipt
   })
   analysisQueue = write.catch(() => {})
@@ -917,6 +917,7 @@ function confirmEntity() {
 Object.assign(window, {
   maliciousFlow: Object.freeze({
     apply_analysis: applyBatch,
+    analysis_updates: (caseId: string, afterRevision: number) => analysisUpdates(data, caseId, afterRevision),
     collect: collectInvestigation,
     stop_collection: () => investigation?.abort(),
     get_selection: getAgentContext,

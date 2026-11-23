@@ -37,6 +37,8 @@ test('collects an Ethereum transaction in two updates and restores the investiga
   await expect(page.locator('#status')).toContainText('2 transfers')
   await page.getByRole('button', { name: 'Agent chat' }).click()
   await expect(page.locator('#agent-messages')).toContainText('2 transfers')
+  const updates = await page.evaluate(caseId => (window as any).maliciousFlow.analysis_updates(caseId, 1), snapshot.caseId)
+  expect(updates).toMatchObject({ caseId: snapshot.caseId, revision: 2, receipts: [{ revision: 2, added: 1 }] })
   expect(errors).toEqual([])
 })
 

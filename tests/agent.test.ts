@@ -78,3 +78,16 @@ it('replaces entity members and removes memberships from previous entities exact
   applyEntityMembership(state, 'A', [], 'a', true)
   expect(state.entities).toEqual([])
 })
+
+it('replays receipts after a saved revision without exposing mutable case state', async () => {
+  const { analysisUpdates } = await import('../src/investigation')
+  const seed = { schemaVersion: 1 as const, caseId: demo.id, expectedRevision: 0, requestId: 'first',
+    addresses: [], transfers: [demo.transfers[0]] }
+  let data = applyAnalysis(demo, seed).data
+  data = applyAnalysis(data, { ...seed, expectedRevision: 1, requestId: 'second' }).data
+  const response = analysisUpdates(data, demo.id, 1)
+  expect(response.receipts.map(item => item.revision)).toEqual([2])
+  response.receipts[0].refs.length = 0
+  expect(analysisUpdates(data, demo.id, 0).receipts.map(item => item.refs.length)).toEqual([1, 1])
+  expect(() => analysisUpdates(data, demo.id, 3)).toThrow('Invalid analysis revision')
+})

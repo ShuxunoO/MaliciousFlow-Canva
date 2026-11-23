@@ -10,6 +10,7 @@ The application exposes `window.maliciousFlow` to JavaScript running in the canv
 | `get_selection()` | None | Returns a copy of the view context, including selected node, related transfers, filter bounds, and asset balances |
 | `collect(seed, trace?)` | Ethereum address or transaction hash and optional `{ direction, hops }` | Queries the data provider, applies verified batches, then returns the data coverage statement and event references |
 | `stop_collection()` | None | Aborts an ongoing provider request. Previously committed results remain available |
+| `analysis_updates(caseId, afterRevision)` | Case ID and last processed analysis revision | Returns subsequent persisted receipts in order, including after a reload |
 | `apply_analysis(batch)` | Versioned batch | Resolves to a receipt after writing the batch and updating the graph |
 | `edit_canvas(command)` | Canvas edit described below | Changes the active case. `connect` returns the new relationship ID |
 | `edit_entity({ name, members, replaceId? })` | Entity name and address IDs | Shows the proposed membership in the Agent panel and returns the proposed changes. The user confirms or cancels. Set `replaceId` to replace the members of an existing entity. An empty replacement ungroups it |
@@ -30,6 +31,7 @@ A reference can be an address ID, entity ID, graph edge ID, transaction event ID
 
 | Action | Fields |
 | --- | --- |
+| `include` | `ref` containing an existing address, transaction hash, event ID, or evidence ID |
 | `rename_case` | `text` |
 | `rename` | Visible node `id` and `text` |
 | `note` | Node, edge or transaction `id` and `text` |
@@ -55,7 +57,7 @@ Use `apply_analysis` when an Agent already has transaction evidence or computed 
 | `transfers` | Array of `{ id, source, target, hash, time, asset, assetId, amount, sources }`. Optional `usd`, `evidence`, `rawAmount`, `verification` and `note` |
 | `balances` | Optional array of `{ addressId, assetId, asset, amount, time, source, usd? }` |
 
-Both endpoints of a transfer must exist in the case or the incoming batch. Each transfer requires at least one source. A receipt includes `revision`, `added`, `duplicates`, and `refs`, and the app dispatches a `flow:analysis` event at `#app` after rendering. Version conflicts and duplicate ID conflicts reject the batch. An identical retry returns the original receipt.
+Both endpoints of a transfer must exist in the case or the incoming batch. Each transfer requires at least one source. A receipt includes `revision`, `added`, `duplicates`, and `refs`, and the app dispatches a `flow:analysis` event at `#app` after rendering, with the case ID and receipt in `event.detail`. A consumer recovering after a reload can call `analysis_updates(caseId, lastSeenRevision)` before resuming event processing. Version conflicts and duplicate ID conflicts reject the batch. An identical retry returns the original receipt.
 
 ```js
 const api = window.maliciousFlow
