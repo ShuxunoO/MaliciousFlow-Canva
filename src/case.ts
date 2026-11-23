@@ -1,3 +1,5 @@
+import type { Conclusion } from './report'
+
 export type Point = [number, number]
 
 export interface Address {
@@ -41,6 +43,8 @@ export interface Chapter {
   title: string
   text: string
   refs: string[]
+  paragraphs?: string[]
+  tables?: string[][][]
 }
 
 export interface CaseData {
@@ -50,12 +54,13 @@ export interface CaseData {
   transfers: Transfer[]
   balances?: Balance[]
   chapters?: Chapter[]
+  reportSources?: [string, string[]][]
   core?: string[]
 }
 
 export interface Entity { id: string; name: string; members: string[] }
 export interface Relation { id: string; source: string; target: string; note: string }
-export interface Draft { id: string; text: string; refs: string[] }
+export interface Draft { id: string; text: string; refs: string[]; chapter?: string }
 export interface Edits {
   title?: string
   names: Record<string, string>
@@ -65,6 +70,7 @@ export interface Edits {
   entities: Entity[]
   relations: Relation[]
   drafts: Draft[]
+  conclusions?: Record<string, Conclusion>
 }
 
 export interface Filters { asset?: string; from?: string; to?: string; address?: string; core?: boolean }

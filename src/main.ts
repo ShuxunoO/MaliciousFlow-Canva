@@ -1,6 +1,8 @@
 import { History, latestBalances, project, sumDecimal } from './case'
-import type { CaseData, Edits, Filters, FlowEdge, Point } from './case'
+import type { CaseData, Draft, Edits, Filters, FlowEdge, Point } from './case'
 import { importCase } from './import-case'
+import { indexEvidence, conclusionFor, validateDraft, publishConclusion } from './report'
+import { importLocalReport } from './report-import'
 import { loadCase, saveCase } from './storage'
 import { demo } from './demo'
 import { layout, NODE_HEIGHT, NODE_WIDTH } from './layout'
@@ -55,7 +57,11 @@ let history = new History(readEdits(demo.id))
 let view = project(data, history.value)
 let drawing = layout(view)
 let queue: Promise<void> = Promise.resolve()
-let draftOpen = false
+let draftEditor: Draft | undefined
+let review: { draft: Draft; revision: number } | undefined
+let evidence = indexEvidence(data)
+let reportMode: 'chapters' | 'timeline' = 'chapters'
+let timelinePage = 0
 let openedByUser = false
 const graph = makeGraph($('graph'), setSelection, (id, point) => edit(edits => { edits.positions[id] = point }), () => selection)
 const status = (text: string) => { $('status').textContent = text }
@@ -131,7 +137,11 @@ function openCase(next: CaseData) {
   grouped = false
   hidden = new Set()
   revealed = undefined
-  draftOpen = false
+  draftEditor = undefined
+  review = undefined
+  evidence = indexEvidence(next)
+  reportMode = 'chapters'
+  timelinePage = 0
   history = new History(readEdits(next.id))
   $<HTMLInputElement>('case-title').value = history.value.title ?? next.title
   $('scope').hidden = !next.core
@@ -153,7 +163,7 @@ function eventRows(edge: FlowEdge): string {
       <div class="subtle">${esc(item.time)}${item.usd ? ' · $' + esc(item.usd) : ''}</div>
       <code class="mono">${esc(item.hash)}</code>
       <div class="subtle">${esc(item.sources?.join(' · '))}${item.verification ? ' · ' + esc(item.verification) : ''}</div>
-      ${item.evidence ? `<button class="ref" data-report="${esc(item.evidence)}">证据 ${esc(item.evidence)}</button>` : ''}
+      <button class="ref" data-report="${esc(item.id)}">${item.evidence ? '证据 ' + esc(item.evidence) : '交易来源'}</button>
       <label>交易备注<textarea data-note="${esc(item.id)}">${esc(history.value.notes[item.id] ?? item.note)}</textarea></label>
     </div>`).join('')
   return entries + (edge.events.length > 8
@@ -165,7 +175,7 @@ function renderSelection() {
   const node = selection?.type === 'node' ? view.nodes.find(item => item.id === selection?.id) : undefined
   const edge = selection?.type === 'edge' ? view.edges.find(item => item.id === selection?.id) : undefined
   panel.hidden = !node && !edge
-  const close = '<button data-close aria-label="关闭详情">×</button>'
+  const close = (revealed ? '<button data-return-view>返回原视图</button>' : '') + '<button data-close aria-label="关闭详情">×</button>'
   if (node) {
     const totals = (direction: 'source' | 'target') => {
       const rows = new Map<string, { asset: string; amounts: string[] }>()
@@ -202,7 +212,7 @@ function renderSelection() {
 }
 
 function findReference(reference: string) {
-  return data.transfers.find(item => item.id === reference || item.evidence === reference)
+  return evidence.get(reference)
 }
 
 async function locate(reference: string) {
@@ -223,11 +233,61 @@ async function locate(reference: string) {
 const refsMarkup = (refs: string[]) => refs.map(ref => `<button class="ref" data-focus="${esc(ref)}">${esc(ref)}</button>`).join(' ')
 
 function renderReport() {
-  const chapters = (data.chapters ?? []).map(chapter =>
-    `<article><h3>${esc(chapter.title)}</h3><p>${esc(chapter.text)}</p><div class="actions">${refsMarkup(chapter.refs.slice(0, 20))}</div></article>`).join('')
-  const drafts = history.value.drafts.map(draft => `<article><h3>调查草稿</h3><p>${esc(draft.text)}</p><div class="actions">${refsMarkup(draft.refs)}</div></article>`).join('')
-  $('report-content').innerHTML = (chapters || '<p class="subtle">暂无报告章节</p>') + drafts
-    + (draftOpen ? '<form id="draft-form" class="stack"><label>草稿<textarea id="draft-text" required></textarea></label><button>保存草稿</button></form>' : '')
+  const chapters = (data.chapters ?? []).map(chapter => {
+    const conclusion = conclusionFor(chapter, history.value)
+    return `<article>
+      <h3>${esc(chapter.title)}</h3><p>${esc(conclusion.text)}</p>
+      ${conclusion.revision ? `<small>结论版本 ${conclusion.revision}</small>` : ''}
+      ${chapter.paragraphs?.length || chapter.tables?.length ? `<details data-chapter="${esc(chapter.id)}"><summary>正文与表格</summary><div></div></details>` : ''}
+      <div class="actions">${refsMarkup(conclusion.refs.slice(0, 8))}</div>
+      ${conclusion.refs.length > 8 ? `<details data-chapter-refs="${esc(chapter.id)}"><summary>其余引用（${conclusion.refs.length - 8}）</summary><div class="actions"></div></details>` : ''}
+    </article>`
+  }).join('')
+  const rows = evidence.timeline.slice(timelinePage * 25, (timelinePage + 1) * 25).map(item =>
+    `<tr><td>${esc(item.time.slice(0, 19).replace('T', ' '))}</td><td>${esc(item.amount + ' ' + item.asset)}</td><td>${refsMarkup([item.evidence ?? item.id])}</td></tr>`).join('')
+  const timeline = rows
+    ? `<div class="report-table"><table><thead><tr><th>时间 UTC</th><th>金额</th><th>证据</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="actions"><button data-timeline="-1" ${timelinePage ? '' : 'disabled'}>上页</button>
+      <small>${timelinePage + 1} / ${Math.ceil(evidence.timeline.length / 25)}</small>
+      <button data-timeline="1" ${(timelinePage + 1) * 25 >= evidence.timeline.length ? 'disabled' : ''}>下页</button></div>`
+    : '<p class="subtle">暂无交易</p>'
+  const sources = data.reportSources?.map(([title, items]) =>
+    `<h3>${esc(title)}</h3><ul>${items.map(item => `<li>${/^https?:\/\//.test(item)
+      ? `<a href="${esc(item)}" target="_blank" rel="noreferrer">${esc(item)}</a>` : esc(item)}</li>`).join('')}</ul>`).join('')
+  const drafts = history.value.drafts.map(draft => `<article><h3>调查草稿</h3><p>${esc(draft.text)}</p>
+    <div class="actions">${refsMarkup(draft.refs)}<button data-edit-draft="${esc(draft.id)}">编辑草稿</button>
+    ${draft.chapter ? `<button data-review-draft="${esc(draft.id)}">预览结论</button>` : ''}</div></article>`).join('')
+  const editor = draftEditor ? `<form id="draft-form" class="stack">
+    <label>目标章节<select id="draft-chapter"><option value="">调查草稿</option>${(data.chapters ?? [])
+      .map(item => `<option value="${esc(item.id)}" ${item.id === draftEditor?.chapter ? 'selected' : ''}>${esc(item.title)}</option>`).join('')}</select></label>
+    <label>草稿<textarea id="draft-text" aria-label="草稿" required>${esc(draftEditor.text)}</textarea></label>
+    <label>引用（每行一个）<textarea id="draft-refs" aria-label="引用（每行一个）">${esc(draftEditor.refs.join('\n'))}</textarea></label>
+    <button>保存草稿</button><output id="draft-error" role="alert"></output></form>` : ''
+  const current = review ? conclusionFor(data.chapters?.find(item => item.id === review?.draft.chapter), history.value) : undefined
+  const comparison = review && current ? `<article class="review stack"><h3>结论变更预览</h3>
+    <div><small>当前 · 版本 ${review.revision}</small><p>${esc(current.text)}</p><div class="actions">${refsMarkup(current.refs.slice(0, 8))}</div></div>
+    <div><small>拟更新</small><p>${esc(review.draft.text)}</p><div class="actions">${refsMarkup(review.draft.refs)}</div></div>
+    <div class="actions"><button data-publish>确认更新</button><button data-cancel-review>取消</button></div></article>` : ''
+  const panel = $('report-content')
+  panel.innerHTML = `<nav class="actions report-tabs" aria-label="报告视图">
+    <button data-report-mode="chapters" aria-pressed="${reportMode === 'chapters'}">章节</button>
+    <button data-report-mode="timeline" aria-pressed="${reportMode === 'timeline'}">交易时间线</button></nav>`
+    + comparison + editor + (reportMode === 'chapters'
+      ? drafts + (chapters || '<p class="subtle">暂无报告章节</p>') + (sources ? `<details><summary>报告来源</summary>${sources}</details>` : '')
+      : timeline)
+  panel.querySelectorAll<HTMLDetailsElement>('details[data-chapter], details[data-chapter-refs]').forEach(details => {
+    details.addEventListener('toggle', () => {
+      if (!details.open) return
+      const body = details.querySelector('div')!
+      if (body.hasChildNodes()) return
+      const chapter = data.chapters?.find(item => item.id === (details.dataset.chapter ?? details.dataset.chapterRefs))
+      if (!chapter) return
+      body.innerHTML = details.dataset.chapterRefs ? refsMarkup(conclusionFor(chapter, history.value).refs.slice(8))
+        : (chapter.paragraphs ?? []).map(text => `<p>${esc(text)}</p>`).join('')
+          + (chapter.tables ?? []).map(rows => `<div class="report-table"><table><tbody>${rows
+            .map((row, index) => `<tr>${row.map(cell => index ? `<td>${esc(cell)}</td>` : `<th>${esc(cell)}</th>`).join('')}</tr>`).join('')}</tbody></table></div>`).join('')
+    })
+  })
 }
 
 function reportEvidence(reference: string) {
@@ -238,7 +298,10 @@ function reportEvidence(reference: string) {
   const item = findReference(reference)
   if (!item) return
   $('report-content').insertAdjacentHTML('afterbegin',
-    `<article id="report-evidence" class="flash"><h3>证据 ${esc(reference)}</h3><p>${esc(item.amount)} ${esc(item.asset)} · ${esc(item.time)}</p><code class="mono">${esc(item.hash)}</code><p>${esc(item.sources?.join(' · '))}</p>${refsMarkup([reference])}</article>`)
+    `<article id="report-evidence" class="flash"><h3>${item.evidence ? '证据 ' + esc(item.evidence) : '交易来源'}</h3>
+      <p>${esc(item.amount)} ${esc(item.asset)} · ${esc(item.time)}</p><code class="mono">${esc(item.hash)}</code>
+      <p>${esc(item.sources?.join(' · ') || '来源未提供')}${item.verification ? ' · ' + esc(item.verification) : ''}</p>
+      ${refsMarkup([item.evidence ?? item.id])}</article>`)
   panel.querySelector('#report-evidence')?.scrollIntoView({ block: 'nearest' })
 }
 
@@ -278,14 +341,9 @@ $('case-file').addEventListener('change', async event => {
     const raw = payloads.find(item => item && (Array.isArray(item.addresses) && Array.isArray(item.transfers)
       || Array.isArray(item.nodes) && Array.isArray(item.events)))
     const report = payloads.find(item => item !== raw && Array.isArray(item?.chapters))
-    const chapters = report?.chapters.map((chapter: { id: string; title: string; lede?: string; blocks?: { html?: string }[] }) => {
-      const html = (chapter.blocks ?? []).map(block => block.html ?? '').join(' ')
-      const doc = new DOMParser().parseFromString(html, 'text/html')
-      const refs = [...doc.querySelectorAll('a[href^="#ex-"]')].map(link => link.getAttribute('href')!.slice(4))
-      const lede = new DOMParser().parseFromString(chapter.lede ?? '', 'text/html').body.textContent ?? ''
-      return { id: chapter.id, title: chapter.title, text: lede, refs: [...new Set(refs)] }
-    })
-    const next = importCase(raw, chapters)
+    const importedReport = report && importLocalReport(report)
+    const next = importCase(raw, importedReport?.chapters)
+    if (importedReport) next.reportSources = importedReport.sources
     openCase(next)
     await saveCase(next)
   } catch (error) {
@@ -345,8 +403,48 @@ document.addEventListener('click', event => {
     $('results').hidden = true
     void locate(button.dataset.focus)
   }
+  if (button.hasAttribute('data-return-view')) {
+    revealed = undefined
+    setSelection()
+  }
+  if (button.dataset.reportMode) {
+    reportMode = button.dataset.reportMode === 'timeline' ? 'timeline' : 'chapters'
+    renderReport()
+  }
+  if (button.dataset.timeline) {
+    timelinePage += Number(button.dataset.timeline)
+    renderReport()
+  }
+  if (button.dataset.editDraft) {
+    draftEditor = history.value.drafts.find(draft => draft.id === button.dataset.editDraft)
+    renderReport()
+  }
+  if (button.dataset.reviewDraft) {
+    const draft = history.value.drafts.find(item => item.id === button.dataset.reviewDraft)
+    if (draft) {
+      review = { draft, revision: conclusionFor(data.chapters?.find(item => item.id === draft.chapter), history.value).revision }
+      renderReport()
+    }
+  }
+  if (button.hasAttribute('data-publish') && review) {
+    const proposal = review
+    try {
+      edit(edits => publishConclusion(edits, proposal.draft, data, proposal.revision, new Date().toISOString()))
+      review = undefined
+      renderReport()
+    } catch (error) {
+      status(error instanceof Error ? error.message : String(error))
+    }
+  }
+  if (button.hasAttribute('data-cancel-review')) {
+    review = undefined
+    renderReport()
+  }
   if (button.dataset.report) reportEvidence(button.dataset.report)
-  if (button.hasAttribute('data-close')) setSelection()
+  if (button.hasAttribute('data-close')) {
+    revealed = undefined
+    setSelection()
+  }
   if (button.dataset.page) {
     page += Number(button.dataset.page)
     renderSelection()
@@ -397,16 +495,30 @@ document.addEventListener('click', event => {
   }
 })
 
-$('draft').onclick = () => { draftOpen = !draftOpen; renderReport() }
-$('report').addEventListener('submit', event => {
-  event.preventDefault()
-  const text = value('draft-text').trim()
-  if (!text) return
+$('draft').onclick = () => {
   const edge = view.edges.find(item => item.id === selection?.id)
-  const refs = edge?.events.map(item => item.evidence ?? item.id) ?? (selection ? [selection.id] : [])
-  edit(edits => { edits.drafts.push({ id: crypto.randomUUID(), text, refs }) })
-  draftOpen = false
+  const refs = edge?.events.length ? edge.events.map(item => item.evidence ?? item.id) : selection?.type === 'node' ? [selection.id] : []
+  draftEditor = draftEditor ? undefined : { id: crypto.randomUUID(), text: '', refs }
+  reportMode = 'chapters'
   renderReport()
+}
+$('report').addEventListener('submit', event => {
+  if ((event.target as HTMLFormElement).id !== 'draft-form' || !draftEditor) return
+  event.preventDefault()
+  try {
+    const saved = validateDraft({ ...draftEditor, text: value('draft-text'),
+      refs: value('draft-refs').split(/\r?\n/), chapter: value('draft-chapter') || undefined }, data, history.value)
+    edit(edits => {
+      const index = edits.drafts.findIndex(draft => draft.id === saved.id)
+      if (index === -1) edits.drafts.push(saved)
+      else edits.drafts[index] = saved
+    })
+    draftEditor = undefined
+    review = undefined
+    renderReport()
+  } catch (error) {
+    $('draft-error').textContent = error instanceof Error ? error.message : String(error)
+  }
 })
 
 $('agent-panel').innerHTML = '<div class="stack"><h3>Agent</h3><p id="agent-context" class="subtle"></p><p class="subtle">Agent 运行时待接入</p></div>'
