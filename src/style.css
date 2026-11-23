@@ -61,3 +61,5 @@ header.top{display:flex;align-items:center;justify-content:space-between;gap:16p
 #report summary{font-size:13px;color:var(--accent);cursor:pointer;margin:8px 0}
 #report-content .review{padding:12px;background:#192d38;border-radius:8px}
 #draft-error{color:#ffc2ac;font-size:12px}
+.agent-message{border-top:1px solid var(--border);padding:8px 0;overflow-wrap:anywhere}
+.agent-message p,#agent-progress{font-size:12px;line-height:1.6;color:#b7cecf}

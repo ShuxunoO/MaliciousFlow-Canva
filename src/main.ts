@@ -1,5 +1,7 @@
 import { History, latestBalances, project, sumDecimal } from './case'
 import type { CaseData, Draft, Edits, Filters, FlowEdge, Point } from './case'
+import { applyAnalysis, entityMembers, investigationSummary, type AnalysisBatch, type Receipt } from './investigation'
+import { blockscout } from './blockscout'
 import { importCase } from './import-case'
 import { indexEvidence, conclusionFor, validateDraft, publishConclusion } from './report'
 import { importLocalReport } from './report-import'
@@ -16,7 +18,7 @@ app.innerHTML = `
       <div class="brand">MALICIOUSFLOW</div><input id="case-title" aria-label="画布名称">
     </div></div>
     <div class="toolbar">
-      <button id="demo">示例</button><button id="import">导入案件</button>
+      <button id="demo">示例</button><button id="new-case">新建调查</button><button id="import">导入案件</button>
       <input type="file" id="case-file" accept="application/json,.json" multiple hidden>
       <button id="undo">撤销</button><button id="redo">重做</button><button id="report-toggle" aria-pressed="true">报告</button>
     </div>
@@ -63,6 +65,13 @@ let evidence = indexEvidence(data)
 let reportMode: 'chapters' | 'timeline' = 'chapters'
 let timelinePage = 0
 let openedByUser = false
+let investigation: AbortController | undefined
+let analysisQueue: Promise<unknown> = Promise.resolve()
+let keepPositions = false
+type AgentMessage = { text: string; refs: string[] }
+let conversation: AgentMessage[] = []
+let entityPreview: { caseId: string; state: Edits; name: string; members: string[] } | undefined
+const provider = blockscout(import.meta.env.VITE_BLOCKSCOUT_URL || undefined)
 const graph = makeGraph($('graph'), setSelection, (id, point) => edit(edits => { edits.positions[id] = point }), () => selection)
 const status = (text: string) => { $('status').textContent = text }
 
@@ -111,7 +120,8 @@ function render(fit = false, focus?: string): Promise<void> {
   queue = queue.catch(() => {}).then(async () => {
     view = project(data, history.value, filters, grouped, hidden, revealed)
     if (selection && ![...view.nodes, ...view.edges].some(item => item.id === selection?.id)) selection = undefined
-    drawing = layout(view, history.value.positions, history.value.bends)
+    drawing = layout(view, keepPositions ? { ...drawing.positions, ...history.value.positions } : history.value.positions, history.value.bends)
+    keepPositions = false
     graph.setData(graphData(view, drawing, history.value, selection))
     await graph.render()
     if (fit && view.nodes.length) await graph.fitView()
@@ -131,7 +141,11 @@ function render(fit = false, focus?: string): Promise<void> {
 }
 
 function openCase(next: CaseData) {
+  investigation?.abort()
+  investigation = undefined
   data = next
+  entityPreview = undefined
+  loadConversation()
   selection = undefined
   filters = { core: !!next.core }
   grouped = false
@@ -147,13 +161,22 @@ function openCase(next: CaseData) {
   $('scope').hidden = !next.core
   $<HTMLSelectElement>('scope').value = next.core ? 'core' : 'all'
   $('grouped').setAttribute('aria-pressed', 'false')
-  const assets = new Map(next.transfers.map(item => [item.assetId, item.asset]))
-  $('asset').innerHTML = '<option value="">全部代币</option>' + [...assets].sort((a, b) => a[1].localeCompare(b[1]))
-    .map(([id, asset]) => `<option value="${esc(id)}">${esc(asset)}${[...assets.values()].filter(name => name === asset).length > 1 ? ' · ' + esc(id.slice(-8)) : ''}</option>`).join('')
+  updateAssets()
+  renderConversation()
   for (const id of ['from', 'to', 'search']) $<HTMLInputElement>(id).value = ''
   $('results').hidden = true
   renderReport()
   void render(true)
+}
+
+function updateAssets() {
+  const assets = new Map(data.transfers.map(item => [item.assetId, item.asset]))
+  const counts = new Map<string, number>()
+  for (const name of assets.values()) counts.set(name, (counts.get(name) ?? 0) + 1)
+  const select = $<HTMLSelectElement>('asset')
+  select.innerHTML = '<option value="">全部代币</option>' + [...assets].sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([id, asset]) => `<option value="${esc(id)}">${esc(asset)}${(counts.get(asset) ?? 0) > 1 ? ' · ' + esc(id.slice(-8)) : ''}</option>`).join('')
+  select.value = filters.asset ?? ''
 }
 
 function eventRows(edge: FlowEdge): string {
@@ -329,6 +352,16 @@ $('demo').onclick = () => {
   openedByUser = true
   openCase(demo)
   void saveCase().catch(() => status('无法清除已保存的案件'))
+}
+$('new-case').onclick = () => {
+  openedByUser = true
+  const blank: CaseData = { id: crypto.randomUUID(), title: 'Ethereum 调查', addresses: [], transfers: [],
+    chapters: [{ id: 'findings', title: '调查结论', text: '', refs: [] }] }
+  openCase(blank)
+  void saveCase(blank).catch(() => status('无法保存新案件'))
+  $('agent-panel').hidden = false
+  $('agent-toggle').setAttribute('aria-expanded', 'true')
+  $('agent-seed').focus()
 }
 $('import').onclick = () => $('case-file').click()
 $('case-file').addEventListener('change', async event => {
@@ -521,12 +554,209 @@ $('report').addEventListener('submit', event => {
   }
 })
 
-$('agent-panel').innerHTML = '<div class="stack"><h3>Agent</h3><p id="agent-context" class="subtle"></p><p class="subtle">Agent 运行时待接入</p></div>'
+$('agent-panel').innerHTML = `<div class="stack"><h3>Agent</h3><p id="agent-context" class="subtle"></p>
+  <form id="agent-form" class="stack"><label>调查起点<input id="agent-seed" placeholder="Ethereum 地址或交易哈希"></label>
+    <div class="actions"><button id="agent-start">采集并上图</button><button id="agent-stop" type="button" hidden>停止</button>
+      <button id="agent-analyze" type="button">分析当前对象</button><button id="agent-draft" type="button">起草</button></div>
+  </form><div id="entity-preview"></div><output id="agent-progress" aria-live="polite"></output><div id="agent-messages" class="stack"></div></div>`
 $('agent-toggle').onclick = () => {
   $('agent-panel').hidden = !$('agent-panel').hidden
   $('agent-toggle').setAttribute('aria-expanded', String(!$('agent-panel').hidden))
   renderAgentContext()
 }
+
+function loadConversation() {
+  conversation = []
+  try {
+    const saved = localStorage.getItem('flow-agent:' + data.id)
+    if (saved) conversation = JSON.parse(saved)
+  } catch {
+    conversation = []
+  }
+}
+
+function renderConversation() {
+  const messages = $('agent-messages')
+  if (!messages) return
+  messages.innerHTML = conversation.slice(-8).map(item => `<div class="agent-message"><p>${esc(item.text)}</p>
+    <div class="actions">${refsMarkup(item.refs.slice(0, 8))}</div></div>`).join('')
+  if (!entityPreview) $('entity-preview').replaceChildren()
+  updateAgentControls()
+}
+
+function message(text: string, refs: string[] = []) {
+  conversation = [...conversation, { text, refs }].slice(-20)
+  try { localStorage.setItem('flow-agent:' + data.id, JSON.stringify(conversation)) } catch { status('无法保存调查记录') }
+  renderConversation()
+}
+
+function updateAgentControls(progress = '') {
+  $<HTMLButtonElement>('agent-start').disabled = !!investigation
+  $('agent-stop').hidden = !investigation
+  $('agent-progress').textContent = progress
+}
+
+function applyBatch(batch: AnalysisBatch): Promise<Receipt> {
+  const write = analysisQueue.then(async () => {
+    const current = data
+    const result = applyAnalysis(current, batch)
+    if (result.data === current) return result.receipt
+    await saveCase(result.data)
+    if (data !== current) throw new Error('当前案件已切换')
+    data = result.data
+    evidence = indexEvidence(data)
+    updateAssets()
+    renderReport()
+    keepPositions = true
+    await render(!view.nodes.length)
+    app.dispatchEvent(new CustomEvent('flow:analysis', { detail: result.receipt }))
+    return result.receipt
+  })
+  analysisQueue = write.catch(() => {})
+  return write
+}
+
+function selectedTransfers() {
+  const edge = view.edges.find(item => item.id === selection?.id)
+  if (edge) return edge.events
+  if (!selection) return view.edges.flatMap(item => item.events)
+  return view.edges.filter(item => item.source === selection?.id || item.target === selection?.id).flatMap(item => item.events)
+}
+
+$('agent-form').addEventListener('submit', async event => {
+  event.preventDefault()
+  if (investigation) return
+  const seed = value('agent-seed').trim()
+  if (!seed) {
+    updateAgentControls('请输入地址或交易哈希')
+    return
+  }
+  const controller = new AbortController()
+  const caseId = data.id
+  investigation = controller
+  const found = new Map<string, CaseData['transfers'][number]>()
+  try {
+    const coverage = await provider.investigate(seed, async batch => {
+      controller.signal.throwIfAborted()
+      if (caseId !== data.id) throw new Error('当前案件已切换')
+      if (!batch.transfers.length && !batch.addresses.length && !batch.balances?.length) return
+      const receipt = await applyBatch({ schemaVersion: 1, caseId, expectedRevision: data.analysis?.revision ?? 0,
+        requestId: crypto.randomUUID(), ...batch })
+      for (const transfer of batch.transfers) found.set(transfer.id, transfer)
+      updateAgentControls(`已同步版本 ${receipt.revision} · 新增 ${receipt.added} 笔`)
+    }, updateAgentControls, controller.signal)
+    if (data.id === caseId) message(investigationSummary([...found.values()]) + ' ' + coverage, [...found.keys()])
+  } catch (error) {
+    if (data.id === caseId) message(controller.signal.aborted ? '调查已停止，已同步的记录保留。'
+      : error instanceof Error ? error.message : String(error), [...found.keys()])
+  } finally {
+    if (investigation === controller) {
+      investigation = undefined
+      updateAgentControls()
+    }
+  }
+})
+$('agent-stop').onclick = () => investigation?.abort()
+$('agent-analyze').onclick = () => {
+  const transfers = selectedTransfers()
+  message(investigationSummary(transfers), transfers.map(item => item.evidence ?? item.id))
+}
+$('agent-draft').onclick = () => {
+  const last = [...conversation].reverse().find(item => item.refs.length)
+  const transfers = selectedTransfers()
+  const text = last?.text ?? investigationSummary(transfers)
+  const refs = last?.refs ?? transfers.map(item => item.evidence ?? item.id)
+  const draft = validateDraft({ id: crypto.randomUUID(), text, refs }, data, history.value)
+  edit(edits => { edits.drafts.push(draft) })
+  reportMode = 'chapters'
+  renderReport()
+  if ($('report-toggle').getAttribute('aria-pressed') === 'false') $('report-toggle').click()
+}
+
+type CanvasCommand =
+  | { action: 'rename' | 'note'; id: string; text: string }
+  | { action: 'move'; id: string; position: Point }
+  | { action: 'bend'; id: string; offset: number }
+  | { action: 'undo' | 'redo' }
+
+function previewEntity(name: string, members: string[]) {
+  const entries = entityMembers(data, history.value, name, members)
+  entityPreview = { caseId: data.id, state: history.value, name: name.trim(), members: entries.map(entry => entry.id) }
+  $('agent-panel').hidden = false
+  $('agent-toggle').setAttribute('aria-expanded', 'true')
+  $('entity-preview').innerHTML = `<div class="stack"><h3>实体归属预览</h3><p>${esc(name)}</p><ul>${entries
+    .map(item => `<li>${esc(item.id)} · ${esc(item.previous ?? '未分组')} → ${esc(name)}</li>`).join('')}</ul>
+    <div class="actions"><button id="entity-confirm">确认归组</button><button id="entity-cancel">取消</button></div></div>`
+  $('entity-confirm').onclick = confirmEntity
+  $('entity-cancel').onclick = () => { entityPreview = undefined; $('entity-preview').replaceChildren() }
+  return entries
+}
+
+function confirmEntity() {
+  const proposal = entityPreview
+  entityPreview = undefined
+  $('entity-preview').replaceChildren()
+  if (!proposal || proposal.caseId !== data.id || proposal.state !== history.value) {
+    message('画布编辑状态已改变，请重新预览实体归属。')
+    return
+  }
+  edit(edits => {
+    for (const entity of edits.entities) entity.members = entity.members.filter(id => !proposal.members.includes(id))
+    let entity = edits.entities.find(item => item.name === proposal.name)
+    if (!entity) {
+      entity = { id: 'entity:' + crypto.randomUUID(), name: proposal.name, members: [] }
+      edits.entities.push(entity)
+    }
+    entity.members.push(...proposal.members)
+    edits.entities = edits.entities.filter(item => item.members.length)
+  })
+  message('已更新实体归属 · ' + proposal.name, proposal.members)
+}
+
+Object.assign(window, {
+  maliciousFlow: Object.freeze({
+    apply_analysis: applyBatch,
+    set_view: async (input?: string | { ref?: string; filters?: Filters }) => {
+      const ref = typeof input === 'string' ? input : input?.ref
+      if (typeof input === 'object' && input.filters) {
+        filters = { ...input.filters }
+        updateAssets()
+        $<HTMLInputElement>('from').value = filters.from?.slice(0, 10) ?? ''
+        $<HTMLInputElement>('to').value = filters.to?.slice(0, 10) ?? ''
+        $<HTMLSelectElement>('scope').value = filters.core ? 'core' : 'all'
+        revealed = undefined
+        await render()
+      }
+      if (ref) await locate(ref)
+      return { caseId: data.id, revision: data.analysis?.revision ?? 0, selection: selection && { ...selection }, filters: { ...filters },
+        visibleNodes: view.nodes.length, visibleTransfers: view.count }
+    },
+    edit_canvas: (command: CanvasCommand) => {
+      if (command.action === 'undo' || command.action === 'redo') {
+        history[command.action]()
+        restore()
+        return
+      }
+      if (!('id' in command)) throw new Error('当前命令无效')
+      const node = view.nodes.find(item => item.id === command.id)
+      const edge = view.edges.find(item => item.id === command.id)
+      const event = evidence.get(command.id)
+      if (command.action === 'rename' && node) edit(edits => { edits.names[node.id] = command.text.trim() })
+      else if (command.action === 'note' && (node || edge || event)) edit(edits => { edits.notes[event?.id ?? command.id] = command.text })
+      else if (command.action === 'move' && node && command.position?.length === 2 && command.position.every(Number.isFinite)) {
+        edit(edits => { edits.positions[node.id] = [...command.position] })
+      } else if (command.action === 'bend' && edge && Number.isFinite(command.offset)) edit(edits => { edits.bends[edge.id] = command.offset })
+      else throw new Error('当前命令或目标对象无效')
+    },
+    edit_entity: (input: { name: string; members: string[] }) => previewEntity(input.name, input.members),
+    edit_report: (input: Omit<Draft, 'id'>) => {
+      const draft = validateDraft({ ...input, id: crypto.randomUUID() }, data, history.value)
+      edit(edits => { edits.drafts.push(draft) })
+      renderReport()
+      return { id: draft.id, refs: draft.refs }
+    },
+  }),
+})
 
 graph.on('aftertransform', updateHandle)
 let dragging: { id: string; axis: 0 | 1; start: number } | undefined

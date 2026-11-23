@@ -1,3 +1,4 @@
+import type { AnalysisState } from './investigation'
 import type { Conclusion } from './report'
 
 export type Point = [number, number]
@@ -54,6 +55,7 @@ export interface CaseData {
   transfers: Transfer[]
   balances?: Balance[]
   chapters?: Chapter[]
+  analysis?: AnalysisState
   reportSources?: [string, string[]][]
   core?: string[]
 }
@@ -111,6 +113,7 @@ export function transact(previous: CaseData, incoming: Pick<CaseData, 'addresses
   }
   for (const item of incoming.transfers) {
     if (!item.id || !item.hash || !item.assetId || !addresses.has(item.source) || !addresses.has(item.target)
+      || typeof item.asset !== 'string' || (item.usd !== undefined && (typeof item.usd !== 'string' || !/^\d+(\.\d+)?$/.test(item.usd)))
       || !Number.isFinite(Date.parse(item.time)) || typeof item.amount !== 'string' || !/^\d+(\.\d+)?$/.test(item.amount)) {
       throw new Error('交易记录无效 ' + item.id)
     }
