@@ -45,7 +45,7 @@ The canvas renders manual relationships as dashed edges. The transaction ledger 
 
 ## Analysis batches
 
-Use `apply_analysis` when an Agent already has transaction evidence or computed snapshots. Use a stable event ID that includes the transaction hash and log position when applicable. Amounts and USD values use exact decimal strings. Times use ISO 8601 with a timezone.
+Use `apply_analysis` when an Agent already has transaction evidence or computed snapshots. The batch, snapshots and receipt have a machine-readable contract. [JSON Schema](schemas/analysis-batch.schema.json) Use a stable event ID that includes the transaction hash and log position when applicable. Amounts and USD values use exact decimal strings. Times use ISO 8601 with a timezone.
 
 | Field | Contract |
 | --- | --- |
