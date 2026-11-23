@@ -7,7 +7,7 @@ const ROW = 162
 const clearance = 10
 
 export type PathCommand = ['M' | 'L', number, number] | ['Q', number, number, number, number]
-export interface Route { points: Point[]; label: Point; handle: Point; path: [['M', number, number], ...PathCommand[]]; blocked: boolean }
+export interface Route { points: Point[]; label: Point; handle: Point; handleAxis: 'x' | 'y'; offset: number; path: [['M', number, number], ...PathCommand[]]; blocked: boolean }
 export interface Drawing { positions: Record<string, Point>; routes: Record<string, Route>; labels: Set<string> }
 
 export function rounded(points: Point[], radius = 24): Route['path'] {
@@ -43,7 +43,7 @@ function compact(points: Point[]): Point[] {
   return result
 }
 
-export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends: Record<string, number> = {}): Drawing {
+export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends: Record<string, number> = {}, previous?: Drawing): Drawing {
   const positions: Record<string, Point> = Object.create(null)
   const routes: Record<string, Route> = Object.create(null)
   const labels = new Set<string>()
@@ -129,10 +129,26 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
     const direct = entry[0] > exit[0] + 70
     const bend = Math.min(entry[0] - 28, Math.max(exit[0] + 28, startLane + (bends[edge.id] ?? 0)))
     const simple: Point[] = [exit, [bend, exit[1]], [bend, entry[1]], entry]
-    const avoids = (points: Point[]) => points.slice(2, -1).every((point, index) => !blocked(points[index + 1], point))
-      && !occupied.some(point => point !== start && hits(points[0], points[1], point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
-      && !occupied.some(point => point !== end && hits(points.at(-2)!, points.at(-1)!, point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
-    let selected = direct && avoids(simple) ? simple : undefined
+    const avoids = (points: Point[]) => {
+      if (points.length === 2) {
+        return !occupied.some(point => point !== start && point !== end
+          && hits(points[0], points[1], point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
+      }
+      return points.slice(2, -1).every((point, index) => !blocked(points[index + 1], point))
+        && !occupied.some(point => point !== start && hits(points[0], points[1], point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
+        && !occupied.some(point => point !== end && hits(points.at(-2)!, points.at(-1)!, point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
+    }
+    const manualOffset = bends[edge.id] ?? 0
+    const flat = exit[1] === entry[1]
+    const prior = previous?.routes[edge.id]
+    const same = (a: Point, b: Point) => a[0] === b[0] && a[1] === b[1]
+    const retained = prior && !prior.blocked && prior.offset === manualOffset
+      && same(prior.points[0], exit) && same(prior.points.at(-1)!, entry) && avoids(prior.points) ? prior : undefined
+    let selected = retained?.points ?? (direct && (!flat || manualOffset === 0) && avoids(simple) ? simple : undefined)
+    if (retained && retained.handleAxis === 'y' && retained.points.length > 2) {
+      const lane = retained.handle[1]
+      horizontalUse.set(lane, (horizontalUse.get(lane) ?? 0) + 1)
+    }
     let track: number = bend
     if (!selected) {
       const topFirst = exit[1] + entry[1] < minY + maxY
@@ -142,7 +158,8 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
         const offset = 72 + slot * 12
         return topFirst ? [minY - offset, maxY + offset] : [maxY + offset, minY - offset]
       }).flat()
-      const offset = bends[edge.id] ?? 0
+      if (flat && direct && manualOffset) local.unshift(exit[1])
+      const offset = manualOffset
       const channels = [...new Set([...local, ...perimeter])].sort((a, b) => {
         const cost = (lane: number) => Math.abs(exit[1] - lane - offset) + Math.abs(entry[1] - lane - offset)
           + (horizontalUse.get(lane + offset) ?? 0) * 180
@@ -180,8 +197,9 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
       labelBoxes.push(label)
       labels.add(edge.id)
     }
-    const handle: Point = selected === simple ? [bend, (exit[1] + entry[1]) / 2] : [(startLane + endLane) / 2, obstruction ? fallbackY : track]
-    routes[edge.id] = { points, label, handle, path: rounded(points), blocked: obstruction }
+    const handle: Point = retained?.handle ?? (selected === simple ? [bend, (exit[1] + entry[1]) / 2] : [(startLane + endLane) / 2, obstruction ? fallbackY : track])
+    routes[edge.id] = { points, label, handle, handleAxis: retained?.handleAxis ?? (selected === simple && !flat ? 'x' : 'y'),
+      offset: manualOffset, path: rounded(points), blocked: obstruction }
   }
   return { positions, routes, labels }
 }

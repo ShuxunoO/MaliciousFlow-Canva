@@ -83,7 +83,10 @@ let chatRequest = 0
 let conversation: AgentMessage[] = []
 let entityPreview: { caseId: string; state: Edits; name: string; members: string[] } | undefined
 const provider = blockscout(import.meta.env.VITE_BLOCKSCOUT_URL || undefined)
-const graph = makeGraph($('graph'), setSelection, (id, point) => edit(edits => { edits.positions[id] = point }), () => selection, toggleBranch)
+const graph = makeGraph($('graph'), setSelection, (id, point) => {
+  keepPositions = true
+  edit(edits => { edits.positions[id] = point })
+}, () => selection, toggleBranch)
 const status = (text: string) => { $('status').textContent = text }
 
 function readEdits(id: string): Edits | HistorySnapshot | undefined {
@@ -152,14 +155,15 @@ function updateHandle() {
   const rect = $('stage').getBoundingClientRect()
   handle.style.left = (x - rect.left) + 'px'
   handle.style.top = (y - rect.top) + 'px'
-  handle.dataset.axis = route.handle[0] === route.points[1]?.[0] ? 'x' : 'y'
+  handle.dataset.axis = route.handleAxis
 }
 
 function render(fit = false, focus?: string, refreshInspector = true): Promise<void> {
   queue = queue.catch(() => {}).then(async () => {
     view = project(data, history.value, filters, grouped, hidden, revealed)
     if (selection && ![...view.nodes, ...view.edges].some(item => item.id === selection?.id)) selection = undefined
-    drawing = layout(view, keepPositions ? { ...drawing.positions, ...history.value.positions } : history.value.positions, history.value.bends)
+    drawing = layout(view, keepPositions ? { ...drawing.positions, ...history.value.positions } : history.value.positions,
+      history.value.bends, keepPositions ? drawing : undefined)
     keepPositions = false
     assetsByNode = nodeAssets(data, view, filters.to)
     graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection))

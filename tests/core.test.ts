@@ -83,3 +83,26 @@ it('restores both undo and redo history from a serialized case edit snapshot', (
   expect(restored.value.title).toBeUndefined()
   expect(History.restore(history.value).value.title).toBe('First name')
 })
+
+it('lets an aligned edge bend vertically without moving either node', () => {
+  const nodes = demo.addresses.slice(0, 2)
+  const view = project({ ...demo, addresses: nodes, transfers: demo.transfers.slice(0, 2) }, emptyEdits())
+  const id = view.edges[0].id
+  const aligned = layout(view)
+  expect(aligned.routes[id].handleAxis).toBe('y')
+  const adjusted = layout(view, aligned.positions, { [id]: 36 })
+  expect(adjusted.positions).toEqual(aligned.positions)
+  expect(adjusted.routes[id].handleAxis).toBe('y')
+  expect(adjusted.routes[id].points.some(point => point[1] === 36)).toBe(true)
+})
+
+it('keeps an unobstructed route on incremental layout and reroutes an invalidated endpoint', () => {
+  const view = project(demo, emptyEdits())
+  const initial = layout(view)
+  const untouched = view.edges.find(edge => edge.source === 'relay' && edge.target === 'beta')!
+  const moved = view.edges.find(edge => edge.target === 'alpha')!
+  const updated = layout(view, { ...initial.positions, alpha: [1100, -240] }, {}, initial)
+  expect(updated.routes[untouched.id].points).toEqual(initial.routes[untouched.id].points)
+  expect(updated.routes[moved.id].points.at(-1)).not.toEqual(initial.routes[moved.id].points.at(-1))
+  expect(updated.routes[moved.id].blocked).toBe(false)
+})
