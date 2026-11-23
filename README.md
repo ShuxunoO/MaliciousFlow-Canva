@@ -39,3 +39,5 @@ npm run test:browser
 「新建调查」打开空白 Ethereum 案件。输入地址或交易哈希后选择「采集并上图」，结果会分批写入。可以折叠浮窗继续浏览画布，也可以停止当前查询，已写入的结果保留。配置 `VITE_BLOCKSCOUT_URL` 可指定一个兼容 Blockscout v2 且允许浏览器跨域访问的 Ethereum 数据服务。
 
 [Agent 接口、数据覆盖和接入示例](docs/agent-api.md)
+
+[KuCoin 实绘几何验收与复现步骤](docs/layout-verification.md)

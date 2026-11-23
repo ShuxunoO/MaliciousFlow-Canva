@@ -8,7 +8,7 @@ import { importLocalReport } from './report-import'
 import { loadCase, saveCase } from './storage'
 import { demo } from './demo'
 import { layout, NODE_HEIGHT, NODE_WIDTH } from './layout'
-import { graphData, makeGraph, type Selection } from './renderer'
+import { graphData, makeGraph, renderedSnapshot, type Selection } from './renderer'
 import './style.css'
 
 const app = document.querySelector<HTMLElement>('#app')!
@@ -159,6 +159,10 @@ function openCase(next: CaseData) {
   history = new History(readEdits(next.id))
   $<HTMLInputElement>('case-title').value = history.value.title ?? next.title
   $('scope').hidden = !next.core
+  const scopes = Object.keys(next.views ?? {}).filter(id => id !== 'core')
+  $('scope').innerHTML = '<option value="core">核心视图</option><option value="all">全量视图</option>' + scopes
+    .map(id => `<option value="${esc(id)}">${id === 'return' ? '回流视图' : id === 'original' ? '原图视图'
+      : '批次 ' + esc(id.replace(/^batch-/, ''))}</option>`).join('')
   $<HTMLSelectElement>('scope').value = next.core ? 'core' : 'all'
   $('grouped').setAttribute('aria-pressed', 'false')
   updateAssets()
@@ -336,7 +340,9 @@ function renderAgentContext() {
 }
 
 function applyFilters(fit = true) {
-  filters = { asset: value('asset') || undefined, from: value('from') || undefined, to: value('to') || undefined, core: value('scope') === 'core' }
+  const scope = value('scope')
+  filters = { asset: value('asset') || undefined, from: value('from') || undefined, to: value('to') || undefined,
+    core: scope === 'core', viewId: scope === 'all' || scope === 'core' ? undefined : scope }
   revealed = undefined
   void render(fit)
 }
@@ -723,7 +729,7 @@ Object.assign(window, {
         updateAssets()
         $<HTMLInputElement>('from').value = filters.from?.slice(0, 10) ?? ''
         $<HTMLInputElement>('to').value = filters.to?.slice(0, 10) ?? ''
-        $<HTMLSelectElement>('scope').value = filters.core ? 'core' : 'all'
+        $<HTMLSelectElement>('scope').value = filters.viewId ?? (filters.core ? 'core' : 'all')
         revealed = undefined
         await render()
       }
@@ -800,4 +806,4 @@ function inspectDrawing() {
   }
 }
 
-if (import.meta.env.DEV) Object.assign(window, { flowCanvas: { canvasCoordinates, inspectDrawing } })
+if (import.meta.env.DEV) Object.assign(window, { flowCanvas: { canvasCoordinates, inspectDrawing, renderedSnapshot: () => renderedSnapshot(graph, view, value('scope')) } })

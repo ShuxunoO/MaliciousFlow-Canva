@@ -116,14 +116,16 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
   }
   const portOffset = (ids: string[], id: string) => ids.length < 2 ? 0 : (ids.indexOf(id) / (ids.length - 1) - .5) * 64
   const labelBoxes: Point[] = []
+  const horizontalUse = new Map<number, number>()
+  const laneDistance = (ids: string[], id: string) => 32 + (ids.indexOf(id) / Math.max(1, ids.length - 1)) * 96
   const blocked = (p: Point, q: Point) => occupied.some(point => hits(p, q, point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
   for (const edge of edges) {
     const start = positions[edge.source]
     const end = positions[edge.target]
     const exit: Point = [start[0] + NODE_WIDTH / 2, start[1] + portOffset(outgoing.get(edge.source)!, edge.id)]
     const entry: Point = [end[0] - NODE_WIDTH / 2, end[1] + portOffset(entering.get(edge.target)!, edge.id)]
-    const startLane = exit[0] + 32 + outgoing.get(edge.source)!.indexOf(edge.id) % 12 * 8
-    const endLane = entry[0] - 32 - entering.get(edge.target)!.indexOf(edge.id) % 12 * 8
+    const startLane = exit[0] + laneDistance(outgoing.get(edge.source)!, edge.id)
+    const endLane = entry[0] - laneDistance(entering.get(edge.target)!, edge.id)
     const direct = entry[0] > exit[0] + 70
     const bend = Math.min(entry[0] - 28, Math.max(exit[0] + 28, startLane + (bends[edge.id] ?? 0)))
     const simple: Point[] = [exit, [bend, exit[1]], [bend, entry[1]], entry]
@@ -135,16 +137,24 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
     if (!selected) {
       const topFirst = exit[1] + entry[1] < minY + maxY
       const preferred = Math.round((exit[1] + entry[1]) / (2 * ROW)) * ROW + ROW / 2
-      const channels = [preferred, ...(Array.from({ length: 12 }, (_, slot) => {
-        const offset = 72 + slot * 14
+      const local = [preferred, preferred - 8, preferred + 8, preferred - 16, preferred + 16]
+      const perimeter = Array.from({ length: 24 }, (_, slot) => {
+        const offset = 72 + slot * 12
         return topFirst ? [minY - offset, maxY + offset] : [maxY + offset, minY - offset]
-      }).flat())]
+      }).flat()
+      const offset = bends[edge.id] ?? 0
+      const channels = [...new Set([...local, ...perimeter])].sort((a, b) => {
+        const cost = (lane: number) => Math.abs(exit[1] - lane - offset) + Math.abs(entry[1] - lane - offset)
+          + (horizontalUse.get(lane + offset) ?? 0) * 180
+        return cost(a) - cost(b)
+      })
       for (const base of channels) {
         const lane = base + (bends[edge.id] ?? 0)
         const candidate: Point[] = [exit, [startLane, exit[1]], [startLane, lane], [endLane, lane], [endLane, entry[1]], entry]
         if (avoids(candidate)) {
           selected = candidate
           track = lane
+          horizontalUse.set(lane, (horizontalUse.get(lane) ?? 0) + 1)
           break
         }
       }
@@ -155,11 +165,18 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
     const horizontal = points.slice(1).map((point, index) => ({ start: points[index], end: point }))
       .filter(segment => segment.start[1] === segment.end[1])
       .sort((a, b) => Math.abs(b.end[0] - b.start[0]) - Math.abs(a.end[0] - a.start[0]))
-    const segment = horizontal[0]
-    const label: Point = segment ? [(segment.start[0] + segment.end[0]) / 2, segment.start[1] - 13] : [start[0], start[1] - 13]
-    if (segment && Math.abs(segment.start[0] - segment.end[0]) >= 105
-      && !labelBoxes.some(point => hits(label, label, point, 165, 21))
-      && !occupied.some(point => hits(label, label, point, NODE_WIDTH / 2 + 82, NODE_HEIGHT / 2 + 11))) {
+    const placeAbove = (segment: { start: Point; end: Point }): Point =>
+      [(segment.start[0] + segment.end[0]) / 2, segment.start[1] - 13]
+    const halfWidth = 145 + Math.max(0, (edge.amount?.length ?? 0) - 12) * 4
+    const segment = horizontal.find(candidate => {
+      if (Math.abs(candidate.start[0] - candidate.end[0]) < halfWidth * 1.5) return false
+      const point = placeAbove(candidate)
+      return !labelBoxes.some(other => hits(point, point, other, halfWidth + 180, 22))
+        && !occupied.some(other => hits(point, point, other, NODE_WIDTH / 2 + halfWidth, NODE_HEIGHT / 2 + 11))
+    })
+    const fallbackSegment = segment ?? horizontal[0]
+    const label: Point = fallbackSegment ? placeAbove(fallbackSegment) : [start[0], start[1] - 13]
+    if (segment) {
       labelBoxes.push(label)
       labels.add(edge.id)
     }

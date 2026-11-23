@@ -1,11 +1,26 @@
 import { BaseEdge, CanvasEvent, EdgeEvent, ExtensionCategory, Graph, NodeEvent, Rect, register } from '@antv/g6'
 import type { BaseEdgeStyleProps, GraphData, RectStyleProps } from '@antv/g6'
+import { flattenPath } from './geometry'
 import type { Edits, FlowView, Point } from './case'
 import { NODE_HEIGHT, NODE_WIDTH, type Drawing, type Route } from './layout'
+
+const rendered = new WeakMap<Graph, Map<string, BaseFlowNode | TransactionEdge>>()
+
+function remember(graph: Graph, element: BaseFlowNode | TransactionEdge) {
+  if (!import.meta.env.DEV) return
+  const elements = rendered.get(graph) ?? new Map()
+  elements.set(element.id, element)
+  rendered.set(graph, elements)
+}
 
 interface FlowNodeStyle extends RectStyleProps { title: string; address: string; summary: string; accent: string }
 
 export class BaseFlowNode extends Rect {
+  render(...args: Parameters<Rect['render']>) {
+    super.render(...args)
+    remember(this.context.graph, this)
+  }
+
   protected drawLabelShape(attributes: Required<FlowNodeStyle>, container: NonNullable<Parameters<Rect['render']>[1]>) {
     const { title, address, summary, accent } = attributes
     this.upsert('role-icon', 'circle', { cx: -87, cy: -23, r: 10, fill: accent, opacity: .92 }, container)
@@ -26,6 +41,11 @@ class EntityNode extends BaseFlowNode { protected glyph = '∴' }
 interface FlowStyle extends BaseEdgeStyleProps { route: Route }
 
 class TransactionEdge extends BaseEdge {
+  render(...args: Parameters<BaseEdge['render']>) {
+    super.render(...args)
+    remember(this.context.graph, this)
+  }
+
   protected getKeyPath(attributes: Required<FlowStyle>) {
     return attributes.route.path
   }
@@ -41,6 +61,33 @@ class TransactionEdge extends BaseEdge {
 register(ExtensionCategory.NODE, 'flow-address', AddressNode)
 register(ExtensionCategory.NODE, 'flow-entity', EntityNode)
 register(ExtensionCategory.EDGE, 'transaction-path', TransactionEdge)
+
+export function renderedSnapshot(graph: Graph, view: FlowView, name: string) {
+  const elements = rendered.get(graph)
+  if (!elements) throw new Error('没有可导出的渲染快照')
+  const boxFor = (id: string, key: string) => {
+    const shape = elements.get(id)?.getShape(key)
+    if (!shape) return
+    const { min, max } = shape.getBounds()
+    return [min[0], min[1], max[0] - min[0], max[1] - min[1]]
+  }
+  return {
+    geometry: 'rendered', view: name, tolerance: .5,
+    nodes: view.nodes.map(node => ({ id: node.id, box: boxFor(node.id, 'key') })),
+    edges: view.edges.map(edge => {
+      const key = elements.get(edge.id)?.getShape('key')
+      if (!key) throw new Error('交易边未绘制 ' + edge.id)
+      const path = key.attributes.d as Route['path']
+      const points = flattenPath(path)
+      return { id: edge.id, source: edge.source, target: edge.target, points,
+        data: { amount: edge.amount, asset: edge.asset, events: edge.events.map(item => [item.id, item.rawAmount, item.evidence]) } }
+    }),
+    labels: view.edges.flatMap(edge => {
+      const box = boxFor(edge.id, 'label')
+      return box ? [{ id: 'label:' + edge.id, edge: edge.id, box }] : []
+    }),
+  }
+}
 
 export type Selection = { type: 'node' | 'edge'; id: string }
 

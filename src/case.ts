@@ -58,6 +58,7 @@ export interface CaseData {
   analysis?: AnalysisState
   reportSources?: [string, string[]][]
   core?: string[]
+  views?: Record<string, string[]>
 }
 
 export interface Entity { id: string; name: string; members: string[] }
@@ -75,7 +76,7 @@ export interface Edits {
   conclusions?: Record<string, Conclusion>
 }
 
-export interface Filters { asset?: string; from?: string; to?: string; address?: string; core?: boolean }
+export interface Filters { asset?: string; from?: string; to?: string; address?: string; core?: boolean; viewId?: string }
 export interface FlowNode extends Address { members?: string[] }
 export interface FlowEdge {
   id: string
@@ -136,7 +137,8 @@ export function transact(previous: CaseData, incoming: Pick<CaseData, 'addresses
 
 export function project(data: CaseData, edits: Edits, filters: Filters = {}, grouped = false,
   hidden = new Set<string>(), reveal?: string): FlowView {
-  const core = filters.core && data.core ? new Set(data.core) : undefined
+  const scope = filters.viewId ? data.views?.[filters.viewId] : filters.core ? data.core : undefined
+  const core = scope ? new Set(scope) : undefined
   const mapping = new Map<string, string>()
   const nodes = new Map<string, FlowNode>(data.addresses.map(item => [item.id, { ...item, name: edits.names[item.id] ?? item.name }]))
   if (grouped) for (const entity of edits.entities) {

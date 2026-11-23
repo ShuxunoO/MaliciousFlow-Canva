@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 
 const casePath = process.env.KUCOIN_CASE
 const reportPath = process.env.KUCOIN_REPORT
@@ -11,11 +11,22 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
+  const importStarted = performance.now()
   await page.locator('#case-file').setInputFiles([casePath!, ...(reportPath && existsSync(reportPath) ? [reportPath] : [])])
   await expect(page.getByLabel('画布名称')).toHaveValue('KuCoin 2020 · 资金流调查', { timeout: 40_000 })
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '182', { timeout: 40_000 })
   await expect(page.locator('#graph')).toHaveAttribute('data-edges', '285')
   await expect(page.locator('#status')).toContainText('1,307 笔转账')
+  async function savePainted(view: string, elapsed: number) {
+    const snapshot = await page.evaluate(() => (window as any).flowCanvas.renderedSnapshot())
+    expect(snapshot.geometry).toBe('rendered')
+    expect(snapshot.nodes.every((node: { box?: number[] }) => node.box?.every(Number.isFinite))).toBe(true)
+    expect(snapshot.edges.every((edge: { points: unknown[] }) => edge.points.length >= 2)).toBe(true)
+    if (view === 'return') expect(snapshot.labels.length).toBeGreaterThan(0)
+    writeFileSync(test.info().outputPath(view + '.geometry.json'), JSON.stringify(snapshot))
+    console.log(view + ' render elapsed: ' + Math.round(elapsed) + ' ms')
+    return snapshot
+  }
   async function inspectPaths() {
     return page.evaluate(() => {
       const drawing = (window as any).flowCanvas.inspectDrawing() as {
@@ -39,14 +50,24 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
       return { brokenAnchors, blocked, curves }
     })
   }
+  await savePainted('core', performance.now() - importStarted)
   const core = await inspectPaths()
   expect(core).toMatchObject({ brokenAnchors: 0, blocked: 0 })
   expect(core.curves).toBeGreaterThan(0)
   await page.screenshot({ path: test.info().outputPath('kucoin-core.png') })
+  for (const [id, addresses, edges] of [['return', '5', '6'], ['batch-D8', '248', '249']]) {
+    const start = performance.now()
+    await page.getByLabel('案件视图').selectOption(id)
+    await expect(page.locator('#graph')).toHaveAttribute('data-nodes', addresses)
+    await expect(page.locator('#graph')).toHaveAttribute('data-edges', edges)
+    await savePainted(id, performance.now() - start)
+  }
+  const allStarted = performance.now()
   await page.getByLabel('案件视图').selectOption('all')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '1748', { timeout: 45_000 })
   await expect(page.locator('#graph')).toHaveAttribute('data-edges', '2475')
   await expect(page.locator('#status')).toContainText('6,314 笔转账')
+  await savePainted('all', performance.now() - allStarted)
   const full = await inspectPaths()
   expect(full).toMatchObject({ brokenAnchors: 0, blocked: 0 })
   console.log('KuCoin path diagnostics', { core, full })

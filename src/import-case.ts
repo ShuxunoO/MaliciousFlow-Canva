@@ -4,7 +4,7 @@ interface KuCoinPayload {
   nodes: { id: string; address: string; code: string; label?: string; roleName?: string; color?: string }[]
   events: { id: string; source: string; target: string; hash: string; timestamp: string; asset: string;
     amount: string; amountRaw?: string; verification?: string; token?: string; exhibit?: string; sources?: string[]; note?: string }[]
-  views: {
+  views: Record<string, { edges: { data: { events: number[] } }[] }> & {
     all: { nodes: { id: string; data?: { layoutColumn?: number; layoutBatch?: string } }[] }
     core: { edges: { data: { events: number[] } }[] }
   }
@@ -21,14 +21,17 @@ export function importCase(raw: unknown, chapters?: Chapter[]): CaseData {
   let data: CaseData
   if (isKuCoin(raw)) {
     const columns = new Map(raw.views.all.nodes.map(item => [item.id, item.data?.layoutColumn]))
-    const core = new Set(raw.views.core.edges.flatMap(edge => edge.data.events))
+    const views: Record<string, string[]> = {}
     const events = raw.events.map(event => ({
       id: event.id, source: event.source, target: event.target, hash: event.hash,
       time: event.timestamp, asset: event.asset, assetId: '1:' + (event.token?.toLowerCase() || 'native'),
       amount: event.amount, rawAmount: event.amountRaw, verification: event.verification, evidence: event.exhibit || undefined, sources: event.sources, note: event.note,
     }))
-    for (const index of core) {
-      if (!Number.isInteger(index) || !events[index]) throw new Error('KuCoin 核心视图引用无效')
+    for (const [name, view] of Object.entries(raw.views)) {
+      if (name === 'all' || !('edges' in view)) continue
+      const members = new Set(view.edges.flatMap(edge => edge.data.events))
+      for (const index of members) if (!Number.isInteger(index) || !events[index]) throw new Error('KuCoin 核心视图引用无效')
+      views[name] = [...members].map(index => events[index].id)
     }
     const sections = new Map<string, string[]>()
     for (const event of events) {
@@ -45,7 +48,8 @@ export function importCase(raw: unknown, chapters?: Chapter[]): CaseData {
         role: node.roleName, column: columns.get(node.id), color: node.color,
       })),
       transfers: events,
-      core: [...core].map(index => events[index].id),
+      core: views.core,
+      views,
       chapters: chapters ?? [...sections].map(([id, refs]) => ({
         id, title: '账本 ' + id, text: refs.length + ' 条交易证据', refs,
       })),
