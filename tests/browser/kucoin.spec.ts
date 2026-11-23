@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 
 const casePath = process.env.KUCOIN_CASE
 const reportPath = process.env.KUCOIN_REPORT
@@ -7,6 +7,8 @@ const reportPath = process.env.KUCOIN_REPORT
 test('imports and reconciles the local KuCoin case in core and full views', async ({ page }) => {
   test.skip(!casePath || !existsSync(casePath), 'Provide KUCOIN_CASE to exercise the workspace data')
   test.setTimeout(90_000)
+  const original = JSON.parse(readFileSync(casePath!, 'utf8'))
+  const timings: Record<string, number> = {}
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
@@ -24,8 +26,16 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
     expect(snapshot.edges.every((edge: { points: unknown[] }) => edge.points.length >= 2)).toBe(true)
     if (view === 'return') expect(snapshot.labels.length).toBeGreaterThan(0)
     writeFileSync(test.info().outputPath(view + '.geometry.json'), JSON.stringify(snapshot))
-    console.log(view + ' render elapsed: ' + Math.round(elapsed) + ' ms')
-    return snapshot
+    const expectedEvents = new Set<number>(original.views[view].edges.flatMap(
+      (edge: { data: { events: number[] } }) => edge.data.events))
+    const expectedLedger = [...expectedEvents].map(index => {
+      const event = original.events[index]
+      return JSON.stringify([event.id, event.amountRaw ?? null, event.exhibit || null])
+    }).sort()
+    const actualLedger = snapshot.edges.flatMap((edge: { data: { events: unknown[][] } }) =>
+      edge.data.events.map(event => JSON.stringify(event))).sort()
+    expect(actualLedger).toEqual(expectedLedger)
+    timings[view] = Math.round(elapsed)
   }
   async function inspectPaths() {
     return page.evaluate(() => {
@@ -70,7 +80,13 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
   await savePainted('all', performance.now() - allStarted)
   const full = await inspectPaths()
   expect(full).toMatchObject({ brokenAnchors: 0, blocked: 0 })
-  console.log('KuCoin path diagnostics', { core, full })
+  const filterStarted = performance.now()
+  await page.getByLabel('Start date UTC').fill('2099-01-01')
+  await expect(page.locator('#status')).toContainText('0 transfers')
+  timings.filter = Math.round(performance.now() - filterStarted)
+  await page.getByRole('button', { name: 'Reset filters' }).click()
+  await expect(page.locator('#graph')).toHaveAttribute('data-edges', '2475', { timeout: 45_000 })
+  writeFileSync(test.info().outputPath('kucoin-timings.json'), JSON.stringify(timings, null, 2))
   await page.getByRole('searchbox').fill('E-6-1-0001')
   await page.locator('#results button').first().click()
   await expect(page.getByRole('heading', { name: 'Transaction details' })).toBeVisible({ timeout: 30_000 })

@@ -44,3 +44,19 @@ python3 ../AML-Canva/skills/funds-flow-layout/scripts/validate_layout.py \
 KUCOIN_BASELINE_HTML=/Shuxun/AML-Canva/case/kucoin-fund-flow.offline.html \
   npm run test:browser -- legacy-layout.spec.ts
 ```
+
+## 首版回归
+
+在 1440 × 900 视口重跑浏览器验收。脚本对核心、回流、D8 和全量逐笔核对事件 ID、原始金额和凭证编号。四个视图均通过端口、穿节点、节点重叠和标签碰撞检查。全量视图的交叉优化可单独复测，四项几何门槛未依赖交叉数。
+
+| 操作 | 本次实测 |
+| --- | ---: |
+| 核心视图导入与绘制 | 745 ms |
+| 切换回流视图 | 95 ms |
+| 切换 D8 批次 | 384 ms |
+| 绘制全量 | 3,404 ms |
+| 在全量视图应用无匹配日期筛选 | 870 ms |
+| 样例节点拖拽与绘制 | 156 ms |
+| 样例分析批次写入与绘制 | 112 ms |
+
+运行 KuCoin 浏览器用例后，执行 `scripts/verify-layout.sh` 可一次检查四个视图并保存审计 JSON。若布局技能位于其他目录，通过 `FUNDS_FLOW_VALIDATOR` 指定 `validate_layout.py`。
