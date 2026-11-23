@@ -1,55 +1,99 @@
-# Agent 接口
+# Canvas Agent API
 
-画布公开同源页面内的 `window.maliciousFlow`。宿主可以通过当前页面的 JavaScript 调用这些命令。应用自身使用同一套案件状态和分析提交逻辑。
+The application exposes `window.maliciousFlow` to JavaScript running in the canvas page. The same commands drive the built-in investigation tools and the Agent panel. Call `set_view()` after the page has loaded to read the active case and analysis revision.
 
-## 调查数据源
+## Commands
 
-默认通过 Blockscout Ethereum 主网 v2 接口获取数据。可用 `VITE_BLOCKSCOUT_URL` 指定兼容的 HTTPS 服务地址。地址调查采集原生余额及近期已确认、有金额的 ETH 和 ERC-20 转账，每类最多读取两页。交易哈希调查采集成功的原生 ETH 转账和 ERC-20 日志。采集以当前调查起点为范围，内部调用、NFT、非 Ethereum 链和跨跳追踪尚未接入。估值凭据来自数据源现有报价，转账仅在数据源提供历史汇率时计算 USD。规则化分析按资产分别汇总并生成引用。
+| Method | Input | Result |
+| --- | --- | --- |
+| `set_view()` | Optional reference string or view options | Resolves to the active case ID, analysis revision, selection, filters, grouping, visible counts and zoom level |
+| `get_selection()` | None | Returns a copy of the view context, including selected node, related transfers, filter bounds, and asset balances |
+| `collect(seed)` | Ethereum address or transaction hash | Queries the data provider, applies verified batches, then returns the data coverage statement and event references |
+| `stop_collection()` | None | Aborts an ongoing provider request. Previously committed results remain available |
+| `apply_analysis(batch)` | Versioned batch | Resolves to a receipt after writing the batch and updating the graph |
+| `edit_canvas(command)` | Canvas edit described below | Changes the active case. `connect` returns the new relationship ID |
+| `edit_entity({ name, members })` | Entity name and address IDs | Shows the proposed membership in the Agent panel and returns the proposed changes. The user confirms or cancels |
+| `edit_report({ text, refs, chapter })` | Draft text, reference IDs and optional chapter ID | Saves a cited draft and returns its ID and references. The user reviews the proposed conclusion before publishing |
+| `show_evidence(ref)` | Transaction event ID or evidence ID | Opens the evidence in the report pane and returns a copy of the transaction |
+| `set_agent_handler(handler?)` | Function or `undefined` | Installs an Agent integration or restores the built-in rule-based responder |
 
-## 分批写入
+A reference can be an address ID, entity ID, graph edge ID, transaction event ID or evidence ID. Transaction evidence can be revealed temporarily outside the current filters. Use `set_view({ clearSelection: true })` to clear the selection and dismiss temporary reveals.
 
-`apply_analysis(batch)` 校验并保存分析结果，完成图更新后返回回执，同时在 `#app` 触发 `flow:analysis` 事件。
+### View options
 
-| 字段 | 约定 |
+- `ref` locates a graph object or evidence record.
+- `filters` replaces the current filter object. It may include `address`, `asset`, `from`, `to`, `core` and `viewId`. An address filter accepts an address or entity ID. `asset` uses the stable asset ID from the case, such as `1:native` for ETH. `from` is inclusive and `to` is exclusive.
+- `grouped` turns entity aggregation on or off. `branch` accepts `{ id, direction: 'in' | 'out', collapsed }`.
+- `fit` fits visible nodes to the canvas. `zoom` sets the zoom factor and `pan: [dx, dy]` translates the viewport.
+
+### Canvas edits
+
+| Action | Fields |
 | --- | --- |
-| `schemaVersion` | 当前为 1 |
-| `caseId` | 当前案件 ID |
-| `expectedRevision` | 从视图读取的当前分析版本 |
-| `requestId` | 每次新提交使用唯一字符串，重试使用原请求 ID 及相同完整请求 |
-| `addresses` | 地址记录数组，字段为 `id`、`address`、`name` |
-| `transfers` | 事件记录数组，提供稳定的 `id`、`source`、`target`、`hash`、`time`、`asset`、`assetId`、`amount` 和来源数组 `sources` |
-| `balances` | 可选快照数组，每项含 `addressId`、`assetId`、`asset`、`amount`、`time`、`source` 及可选的 `usd` |
+| `rename_case` | `text` |
+| `rename` | Visible node `id` and `text` |
+| `note` | Node, edge or transaction `id` and `text` |
+| `move` | Visible node `id` and canvas coordinates `position: [x, y]` |
+| `bend` | Visible edge `id` and numeric route `offset` |
+| `connect` | `source` and `target` node IDs, with optional `note` |
+| `disconnect` | Manual relationship `id` |
+| `undo`, `redo` | None |
 
-金额用十进制字符串，时间使用带时区的 ISO 8601 字符串。ERC-20 事件 ID 包含链、交易哈希和日志位置。回执含 `revision`、`added`、`duplicates` 和 `refs`。相同请求返回原回执。旧版本、缺少来源和冲突事件均会报错，批次会整体拒绝。
+The canvas renders manual relationships as dashed edges. The transaction ledger continues to represent sourced on-chain events.
+
+## Analysis batches
+
+Use `apply_analysis` when an Agent already has transaction evidence or computed snapshots. Use a stable event ID that includes the transaction hash and log position when applicable. Amounts and USD values use exact decimal strings. Times use ISO 8601 with a timezone.
+
+| Field | Contract |
+| --- | --- |
+| `schemaVersion` | `1` |
+| `caseId` | ID of the active case |
+| `expectedRevision` | Current analysis revision from `set_view()` |
+| `requestId` | A unique string. Reuse the exact request body and ID for a transport retry |
+| `addresses` | Array of `{ id, address, name }`, optionally with role, column and color |
+| `transfers` | Array of `{ id, source, target, hash, time, asset, assetId, amount, sources }`. Optional `usd`, `evidence`, `rawAmount`, `verification` and `note` |
+| `balances` | Optional array of `{ addressId, assetId, asset, amount, time, source, usd? }` |
+
+Both endpoints of a transfer must exist in the case or the incoming batch. Each transfer requires at least one source. A receipt includes `revision`, `added`, `duplicates`, and `refs`, and the app dispatches a `flow:analysis` event at `#app` after rendering. Version conflicts and duplicate ID conflicts reject the batch. An identical retry returns the original receipt.
 
 ```js
 const api = window.maliciousFlow
 const { caseId, revision } = await api.set_view()
-const receipt = await api.apply_analysis({
+const address = "0x0000000000000000000000000000000000000001"
+const id = "eth:" + address
+await api.apply_analysis({
   schemaVersion: 1,
   caseId,
   expectedRevision: revision,
   requestId: crypto.randomUUID(),
-  addresses: [{ id: "eth:example", address: "0x0000000000000000000000000000000000000001", name: "示例地址" }],
+  addresses: [{ id, address, name: "Example address" }],
   transfers: []
 })
-console.log(receipt.revision, receipt.refs)
-await api.set_view("eth:example")
+await api.set_view(id)
+api.edit_canvas({ action: "note", id, text: "Review the evidence before attributing this address." })
 ```
 
-## 视图与编辑
+## Agent chat integration
 
-| 调用 | 行为 |
-| --- | --- |
-| `set_view()` | 返回当前案件、版本、选择、筛选及可见规模 |
-| `set_view(ref)` | 定位地址、实体、事件 ID 或证据编号 |
-| `set_view({ ref, filters })` | 更新筛选并按需定位。筛选可提供 `asset`、`from`、`to`、`address`、`core`，时间窗口为左闭右开 |
-| `edit_canvas({ action, ... })` | 可执行 `rename` 和 `note`（`id`、`text`）、`move`（`id`、`position`）、`bend`（`id`、`offset`）及 `undo`、`redo` |
-| `edit_entity({ name, members })` | 生成实体归属预览。用户在浮窗确认后应用 |
-| `edit_report({ text, refs, chapter })` | 保存经引用校验的草稿。目标章节可省略。用户可在报告中预览并确认结论 |
+The built-in responder answers questions about amounts, direction, balances and evidence with data from the current selection. To connect an external Agent, provide a callback. It receives a snapshot of the question, selection and conversation. Return a string `text` and an array of `refs` containing identifiers from the active case.
 
-## 验证
+```js
+window.maliciousFlow.set_agent_handler(async ({ question, context, history }) => {
+  const response = await fetch("/agent", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, context, history })
+  })
+  if (!response.ok) throw new Error("Agent request failed")
+  return response.json()
+})
+```
 
-`npm test` 校验分页、精度、版本冲突、去重及回执重放。Chromium 回归模拟确定的提供方响应，覆盖采集两批、折叠浮窗、生成草稿、实体确认和刷新恢复。通过 `FLOW_LIVE_BLOCKSCOUT=1 npm run test:browser -- agent.spec.ts` 可额外查询一笔历史 Ethereum 交易。
+The example `/agent` route is implemented by the host. Hold any model-provider credentials at that integration boundary.
 
-[Blockscout v2 数据接口](https://github.com/blockscout/blockscout-api-v2-swagger/blob/main/swagger.yaml)
+## Ethereum data provider
+
+Set `VITE_BLOCKSCOUT_URL` to a compatible Ethereum mainnet v2 service that allows requests from the canvas origin. The built-in collection tool reads native balances and confirmed, nonzero native ETH and ERC-20 transfers. It reads up to two pages per feed and reports when more are available. The tool uses historical provider prices for eligible transfer estimates. Internal calls, NFT transfers, additional chains and automatic multi-hop tracing are outside the current data coverage. [Blockscout v2 API](https://github.com/blockscout/blockscout-api-v2-swagger/blob/main/swagger.yaml)
+
+Use `npm test` for unit tests and `npm run test:browser` for the browser suite. With `FLOW_LIVE_BLOCKSCOUT=1`, the browser suite also queries a historical transaction through the online provider.

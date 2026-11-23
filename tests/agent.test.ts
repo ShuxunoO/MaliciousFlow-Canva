@@ -27,7 +27,7 @@ describe('Agent collection', () => {
       [['1:' + hash + ':external', '1.25', '12.5125']],
       [['1:' + hash + ':log:4', '1.234567', undefined]],
     ])
-    expect(investigationSummary(batches.flatMap(batch => batch.transfers))).toContain('1.25 ETH、1.234567 USD')
+    expect(investigationSummary(batches.flatMap(batch => batch.transfers))).toContain('1.25 ETH, 1.234567 USD')
   })
 
   it('uses address cursors without treating pending transfers as confirmed', async () => {
@@ -61,9 +61,9 @@ describe('analysis synchronization', () => {
 
   it('rejects stale, mixed-case, changed and unattributed requests', () => {
     const first = applyAnalysis(demo, batch)
-    expect(() => applyAnalysis(first.data, { ...batch, requestId: 'req-2' })).toThrow('版本冲突')
-    expect(() => applyAnalysis(first.data, { ...batch, transfers: [] })).toThrow('不同批次')
-    expect(() => applyAnalysis(first.data, { ...batch, caseId: 'another' })).toThrow('案件 ID')
-    expect(() => applyAnalysis(demo, { ...batch, transfers: batch.transfers.map(event => ({ ...event, sources: [] })) })).toThrow('缺少来源')
+    expect(() => applyAnalysis(first.data, { ...batch, requestId: 'req-2' })).toThrow('revision conflict')
+    expect(() => applyAnalysis(first.data, { ...batch, transfers: [] })).toThrow('a different batch')
+    expect(() => applyAnalysis(first.data, { ...batch, caseId: 'another' })).toThrow('case ID')
+    expect(() => applyAnalysis(demo, { ...batch, transfers: batch.transfers.map(event => ({ ...event, sources: [] })) })).toThrow('require a source')
   })
 })

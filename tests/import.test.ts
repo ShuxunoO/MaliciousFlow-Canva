@@ -30,14 +30,14 @@ describe('case import', () => {
   it('rejects an invalid core index and missing endpoints before replacing the case', () => {
     const invalid = structuredClone(kucoin)
     invalid.views.core.edges[0].data.events = [2]
-    expect(() => importCase(invalid)).toThrow('核心视图引用无效')
+    expect(() => importCase(invalid)).toThrow('Invalid KuCoin view reference')
     const missing = structuredClone(kucoin)
     missing.nodes.pop()
-    expect(() => importCase(missing)).toThrow('交易记录无效')
+    expect(() => importCase(missing)).toThrow('Invalid transfer')
   })
 
   it('supports the normal case model and optional chapters', () => {
     expect(importCase(demo, []).chapters).toEqual([])
-    expect(() => importCase(null)).toThrow('案件格式无效')
+    expect(() => importCase(null)).toThrow('Invalid case format')
   })
 })

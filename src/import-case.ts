@@ -1,7 +1,7 @@
 import { transact, type CaseData, type Chapter } from './case'
 
 interface KuCoinPayload {
-  nodes: { id: string; address: string; code: string; label?: string; roleName?: string; color?: string }[]
+  nodes: { id: string; address: string; code: string; label?: string; roleName?: string; role?: string; color?: string }[]
   events: { id: string; source: string; target: string; hash: string; timestamp: string; asset: string;
     amount: string; amountRaw?: string; verification?: string; token?: string; exhibit?: string; sources?: string[]; note?: string }[]
   views: Record<string, { edges: { data: { events: number[] } }[] }> & {
@@ -17,6 +17,12 @@ export function isKuCoin(raw: unknown): raw is KuCoinPayload {
     && Array.isArray(data.views?.all?.nodes) && Array.isArray(data.views?.core?.edges)
 }
 
+const kucoinRoles: Record<string, string> = {
+  endpoint: 'Endpoint', recipient: 'Recipient', distributor: 'Distributor', intermediary: 'Intermediary',
+  depositor: 'Depositor', service: 'Service', pool: 'Protocol pool', caller: 'Caller',
+  funder: 'Funder', hot_wallet: 'Exchange wallet', source: 'Source', contract: 'Contract',
+}
+
 export function importCase(raw: unknown, chapters?: Chapter[]): CaseData {
   let data: CaseData
   if (isKuCoin(raw)) {
@@ -30,7 +36,7 @@ export function importCase(raw: unknown, chapters?: Chapter[]): CaseData {
     for (const [name, view] of Object.entries(raw.views)) {
       if (name === 'all' || !('edges' in view)) continue
       const members = new Set(view.edges.flatMap(edge => edge.data.events))
-      for (const index of members) if (!Number.isInteger(index) || !events[index]) throw new Error('KuCoin 核心视图引用无效')
+      for (const index of members) if (!Number.isInteger(index) || !events[index]) throw new Error('Invalid KuCoin view reference')
       views[name] = [...members].map(index => events[index].id)
     }
     const sections = new Map<string, string[]>()
@@ -42,22 +48,22 @@ export function importCase(raw: unknown, chapters?: Chapter[]): CaseData {
     }
     data = {
       id: 'kucoin-2020',
-      title: 'KuCoin 2020 · 资金流调查',
+      title: 'KuCoin 2020 · Fund Flow Investigation',
       addresses: raw.nodes.map(node => ({
         id: node.id, address: node.address, name: node.label || node.code || node.address,
-        role: node.roleName, column: columns.get(node.id), color: node.color,
+        role: kucoinRoles[node.role ?? ''] ?? node.roleName, column: columns.get(node.id), color: node.color,
       })),
       transfers: events,
       core: views.core,
       views,
       chapters: chapters ?? [...sections].map(([id, refs]) => ({
-        id, title: '账本 ' + id, text: refs.length + ' 条交易证据', refs,
+        id, title: 'Ledger ' + id, text: refs.length + ' transaction records', refs,
       })),
     }
   } else {
     const item = raw as Partial<CaseData> | undefined
     if (!item || typeof item.id !== 'string' || !item.id || typeof item.title !== 'string'
-      || !Array.isArray(item.addresses) || !Array.isArray(item.transfers)) throw new Error('案件格式无效')
+      || !Array.isArray(item.addresses) || !Array.isArray(item.transfers)) throw new Error('Invalid case format')
     data = item as CaseData
     if (chapters) data = { ...data, chapters }
   }

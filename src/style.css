@@ -63,3 +63,43 @@ header.top{display:flex;align-items:center;justify-content:space-between;gap:16p
 #draft-error{color:#ffc2ac;font-size:12px}
 .agent-message{border-top:1px solid var(--border);padding:8px 0;overflow-wrap:anywhere}
 .agent-message p,#agent-progress{font-size:12px;line-height:1.6;color:#b7cecf}
+
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  --border: #2b3449;
+  --muted: #aab6cf;
+  --accent: #a8c1ff;
+  color: #eef2fb;
+  background: #101420;
+}
+header.top, .filters { background: #171d2c; }
+header.top { padding: 12px 22px; }
+.mark { background: #b0bffd; color: #141c36; }
+#case-title { font-size: 16px; width: min(360px, 39vw); }
+button, select, input, textarea { background: #20283b; }
+button:hover, button:focus-visible, button[aria-pressed="true"] { background: #2d3a58; }
+button.primary { background: #95b3ff; color: #101b35; font-weight: 650; }
+.filters { padding-block: 11px; gap: 8px; }
+.filters select { max-width: 190px; }
+.filters label { flex-direction: row; }
+.filters input[type=date] { width: 124px; }
+#stage {
+  background-color: #111827;
+  background-image: radial-gradient(#35415a 1px, transparent 1px), radial-gradient(ellipse at 48% 42%, #192439 0, #111827 74%);
+  background-size: 24px 24px, 100% 100%;
+}
+#selection, #agent-panel { background: #1a2235; border-color: #3a4761; }
+#selection { width: min(329px, 86%); }
+#footer button, #agent-toggle { background: #1a2339; }
+#report { background: #151c2c; min-width: 0; padding: 20px 23px; }
+.report-header { padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.report-header h2 { font-size: 18px; letter-spacing: -.025em; }
+.report-tabs { margin-block: 14px 8px; }
+#report-content article { padding-block: 18px; }
+#report-content article h3 { font-size: 15px; letter-spacing: -.01em; }
+#results { background: #1b2438; left: 0; }
+.agent-message p { white-space: pre-wrap; }
+#agent-panel summary { margin: 2px 0 10px; color: var(--accent); cursor: pointer; font-size: 12px; }
+#agent-question { min-height: 58px; }
+#agent-chat-form button { justify-self: end; }
+.agent-message[data-speaker="user"] { border: 0; border-radius: 8px; padding: 8px 10px; background: #27344f; }

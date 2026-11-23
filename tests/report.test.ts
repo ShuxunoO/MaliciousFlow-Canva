@@ -14,9 +14,9 @@ describe('report evidence and conclusions', () => {
   })
 
   it('validates and deduplicates citations before saving a draft', () => {
-    const draft = { id: 'draft', text: '  调查草稿 ', chapter: 'entry', refs: ['D-1', ' D-1 ', 'origin'] }
-    expect(validateDraft(draft, demo, emptyEdits())).toMatchObject({ text: '调查草稿', refs: ['D-1', 'origin'] })
-    expect(() => validateDraft({ ...draft, refs: ['wrong'] }, demo, emptyEdits())).toThrow('找不到引用')
+    const draft = { id: 'draft', text: '  Investigation draft ', chapter: 'entry', refs: ['D-1', ' D-1 ', 'origin'] }
+    expect(validateDraft(draft, demo, emptyEdits())).toMatchObject({ text: 'Investigation draft', refs: ['D-1', 'origin'] })
+    expect(() => validateDraft({ ...draft, refs: ['wrong'] }, demo, emptyEdits())).toThrow('Unknown reference')
   })
 
   it('replaces the confirmed conclusion, retains the previous version and rejects stale confirmations', () => {
@@ -29,7 +29,7 @@ describe('report evidence and conclusions', () => {
       revision: 1, text: '新结论', refs: ['D-1'],
       history: [{ revision: 0, text: chapter.text, refs: chapter.refs, publishedAt: at }],
     })
-    expect(() => publishConclusion(edits, draft, demo, 0, at)).toThrow('重新预览')
+    expect(() => publishConclusion(edits, draft, demo, 0, at)).toThrow('Review the draft again')
     expect(demo.chapters![0].text).toEqual(chapter.text)
   })
 })

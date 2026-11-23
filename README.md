@@ -13,7 +13,7 @@ npm run dev
 
 ## 导入 KuCoin
 
-在工具栏选择「导入案件」，打开 AML-Canva 的 `case/fund-flow-data.json`。可同时选择 KOL-001 v4 的 `build/report.json`，右侧显示报告章节和证据链接。核心视图默认打开，可切换全量视图。当前案件保存在浏览器的 IndexedDB，布局和备注保存在本地。选择「示例」返回内置小型样例。
+在工具栏选择「Import case」，打开 AML-Canva 的 `case/fund-flow-data.json`。可同时选择 KOL-001 v4 的 `build/report.json`，右侧显示报告章节和证据链接。核心视图默认打开，可切换全量视图。内置界面使用英文。导入的案件和报告保留原始文字。当前案件保存在浏览器的 IndexedDB，布局和备注保存在本地。选择「Demo」返回内置小型样例。
 
 ## 验证
 
@@ -36,7 +36,7 @@ npm run test:browser
 
 ## 在线调查与 Agent 接口
 
-「新建调查」打开空白 Ethereum 案件。输入地址或交易哈希后选择「采集并上图」，结果会分批写入。可以折叠浮窗继续浏览画布，也可以停止当前查询，已写入的结果保留。配置 `VITE_BLOCKSCOUT_URL` 可指定一个兼容 Blockscout v2 且允许浏览器跨域访问的 Ethereum 数据服务。
+「New investigation」打开空白 Ethereum 案件。输入地址或交易哈希后选择「Collect and plot」，结果会分批写入。可以折叠浮窗继续浏览画布，也可以停止当前查询，已写入的结果保留。配置 `VITE_BLOCKSCOUT_URL` 可指定一个兼容 Blockscout v2 且允许浏览器跨域访问的 Ethereum 数据服务。
 
 [Agent 接口、数据覆盖和接入示例](docs/agent-api.md)
 

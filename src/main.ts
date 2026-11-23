@@ -2,6 +2,7 @@ import { History, latestBalances, project, sumDecimal } from './case'
 import type { CaseData, Draft, Edits, Filters, FlowEdge, Point } from './case'
 import { applyAnalysis, entityMembers, investigationSummary, type AnalysisBatch, type Receipt } from './investigation'
 import { blockscout } from './blockscout'
+import { answerQuestion, type AgentContext, type AgentHandler } from './agent-context'
 import { importCase } from './import-case'
 import { indexEvidence, conclusionFor, validateDraft, publishConclusion } from './report'
 import { importLocalReport } from './report-import'
@@ -9,39 +10,43 @@ import { loadCase, saveCase } from './storage'
 import { demo } from './demo'
 import { layout, NODE_HEIGHT, NODE_WIDTH } from './layout'
 import { graphData, makeGraph, renderedSnapshot, type Selection } from './renderer'
+import { nodeAssets } from './node-summary'
 import './style.css'
 
 const app = document.querySelector<HTMLElement>('#app')!
 app.innerHTML = `
   <header class="top">
     <div class="identity"><span class="mark" aria-hidden="true">M</span><div>
-      <div class="brand">MALICIOUSFLOW</div><input id="case-title" aria-label="画布名称">
+      <div class="brand">MALICIOUSFLOW</div><input id="case-title" aria-label="Canvas name">
     </div></div>
     <div class="toolbar">
-      <button id="demo">示例</button><button id="new-case">新建调查</button><button id="import">导入案件</button>
+      <button id="demo">Demo</button><button id="new-case">New investigation</button><button id="import">Import case</button>
       <input type="file" id="case-file" accept="application/json,.json" multiple hidden>
-      <button id="undo">撤销</button><button id="redo">重做</button><button id="report-toggle" aria-pressed="true">报告</button>
+      <button id="undo">Undo</button><button id="redo">Redo</button><button id="report-toggle" aria-pressed="true">Report</button>
     </div>
   </header>
   <div class="workspace">
-    <section class="canvas-pane" aria-label="资金流画布">
+    <section class="canvas-pane" aria-label="Fund flow canvas">
       <div class="filters toolbar">
-        <div style="position:relative"><input id="search" type="search" aria-label="地址、名称或交易哈希" placeholder="搜索地址、名称或哈希"><div id="results" hidden></div></div>
-        <select id="asset" aria-label="代币"></select><select id="scope" aria-label="案件视图" hidden><option value="core">核心视图</option><option value="all">全量视图</option></select>
-        <label>从 <input type="date" id="from" aria-label="起始日期 UTC"></label>
-        <label>至 <input type="date" id="to" aria-label="结束日期 UTC"></label>
-        <button id="grouped" aria-pressed="false">实体视图</button><button id="reset">清除筛选</button>
+        <button id="add-seed" class="primary">+ Address / Tx</button>
+        <button id="connect" aria-pressed="false">Connect</button>
+        <select id="address-filter" aria-label="Address or entity"></select>
+        <div style="position:relative"><input id="search" type="search" aria-label="Address, name or transaction hash" placeholder="Search address, name or hash"><div id="results" hidden></div></div>
+        <select id="asset" aria-label="Token"></select><select id="scope" aria-label="Case view" hidden><option value="core">Core view</option><option value="all">All transfers</option></select>
+        <label>From <input type="date" id="from" aria-label="Start date UTC"></label>
+        <label>Before <input type="date" id="to" aria-label="End date UTC"></label>
+        <button id="grouped" aria-pressed="false">Group by entity</button><button id="reset">Reset filters</button>
       </div>
       <div id="stage">
-        <div id="graph"></div><div id="empty" hidden>当前筛选没有匹配的交易</div>
-        <aside id="selection" aria-label="选中对象详情" hidden></aside>
-        <button id="handle" aria-label="拖动交易线" hidden></button>
-        <div id="footer"><div class="actions"><button id="zoom-in" aria-label="放大">＋</button><button id="zoom-out" aria-label="缩小">−</button><button id="fit">适配</button></div><output id="status" aria-live="polite"></output></div>
-        <section id="agent-panel" aria-label="Agent 对话" hidden></section>
-        <button id="agent-toggle" aria-label="Agent 对话" aria-expanded="false">✦</button>
+        <div id="graph"></div><div id="empty" hidden>No transfers match the current filters</div>
+        <aside id="selection" aria-label="Selection details" hidden></aside>
+        <button id="handle" aria-label="Drag transaction edge" hidden></button>
+        <div id="footer"><div class="actions"><button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit">Fit</button></div><output id="status" aria-live="polite"></output></div>
+        <section id="agent-panel" aria-label="Agent chat" hidden></section>
+        <button id="agent-toggle" aria-label="Agent chat" aria-expanded="false">✦</button>
       </div>
     </section>
-    <aside id="report" aria-label="案件报告"><div class="section-heading"><h2>案件报告</h2><button id="draft">起草</button></div><div id="report-content"></div></aside>
+    <aside id="report" aria-label="Case report"><header class="report-header section-heading"><h2>Case report</h2><button id="draft">New draft</button></header><div id="report-content"></div></aside>
   </div>`
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id)! as T
@@ -58,6 +63,7 @@ let page = 0
 let history = new History(readEdits(demo.id))
 let view = project(data, history.value)
 let drawing = layout(view)
+let assetsByNode = nodeAssets(data, view)
 let queue: Promise<void> = Promise.resolve()
 let draftEditor: Draft | undefined
 let review: { draft: Draft; revision: number } | undefined
@@ -68,11 +74,15 @@ let openedByUser = false
 let investigation: AbortController | undefined
 let analysisQueue: Promise<unknown> = Promise.resolve()
 let keepPositions = false
-type AgentMessage = { text: string; refs: string[] }
+let linking = false
+let linkSource: string | undefined
+type AgentMessage = { text: string; refs: string[]; speaker?: 'user' | 'agent' }
+let agentHandler: AgentHandler | undefined
+let chatRequest = 0
 let conversation: AgentMessage[] = []
 let entityPreview: { caseId: string; state: Edits; name: string; members: string[] } | undefined
 const provider = blockscout(import.meta.env.VITE_BLOCKSCOUT_URL || undefined)
-const graph = makeGraph($('graph'), setSelection, (id, point) => edit(edits => { edits.positions[id] = point }), () => selection)
+const graph = makeGraph($('graph'), setSelection, (id, point) => edit(edits => { edits.positions[id] = point }), () => selection, toggleBranch)
 const status = (text: string) => { $('status').textContent = text }
 
 function readEdits(id: string): Edits | undefined {
@@ -88,7 +98,7 @@ function persist() {
   try {
     localStorage.setItem('flow-edits:' + data.id, JSON.stringify(history.value))
   } catch {
-    status('本地存储空间不足')
+    status('Local storage is full')
   }
 }
 
@@ -98,7 +108,31 @@ function edit(change: (edits: Edits) => void) {
   void render()
 }
 
+function toggleBranch(id: string, direction: 'in' | 'out') {
+  const key = id + ':' + direction
+  if (hidden.has(key)) hidden.delete(key)
+  else hidden.add(key)
+  revealed = undefined
+  selection = { type: 'node', id }
+  void render()
+}
+
 function setSelection(item?: Selection) {
+  if (linking && item?.type === 'node') {
+    if (!linkSource) {
+      linkSource = item.id
+      selection = item
+      updateLinkStatus()
+      return
+    }
+    if (linkSource !== item.id) {
+      addRelationship(linkSource, item.id)
+      exitLinkMode()
+      selection = item
+      void render()
+    }
+    return
+  }
   selection = item
   page = 0
   void render()
@@ -116,13 +150,14 @@ function updateHandle() {
   handle.dataset.axis = route.handle[0] === route.points[1]?.[0] ? 'x' : 'y'
 }
 
-function render(fit = false, focus?: string): Promise<void> {
+function render(fit = false, focus?: string, refreshInspector = true): Promise<void> {
   queue = queue.catch(() => {}).then(async () => {
     view = project(data, history.value, filters, grouped, hidden, revealed)
     if (selection && ![...view.nodes, ...view.edges].some(item => item.id === selection?.id)) selection = undefined
     drawing = layout(view, keepPositions ? { ...drawing.positions, ...history.value.positions } : history.value.positions, history.value.bends)
     keepPositions = false
-    graph.setData(graphData(view, drawing, history.value, selection))
+    assetsByNode = nodeAssets(data, view, filters.to)
+    graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection))
     await graph.render()
     if (fit && view.nodes.length) await graph.fitView()
     if (focus) {
@@ -132,9 +167,11 @@ function render(fit = false, focus?: string): Promise<void> {
     $('empty').hidden = !!view.nodes.length
     $('graph').dataset.nodes = String(view.nodes.length)
     $('graph').dataset.edges = String(view.edges.length)
-    status(`${view.nodes.length.toLocaleString()} 个节点 · ${view.edges.length.toLocaleString()} 条边 · ${view.count.toLocaleString()} 笔转账`)
-    renderSelection()
+    const count = (total: number, word: string) => total.toLocaleString('en-US') + ' ' + word + (total === 1 ? '' : 's')
+    status([count(view.nodes.length, 'node'), count(view.edges.length, 'edge'), count(view.count, 'transfer')].join(' · '))
+    if (refreshInspector) renderSelection()
     renderAgentContext()
+    if (linking) updateLinkStatus()
     updateHandle()
   }).catch(error => status(error instanceof Error ? error.message : String(error)))
   return queue
@@ -143,7 +180,9 @@ function render(fit = false, focus?: string): Promise<void> {
 function openCase(next: CaseData) {
   investigation?.abort()
   investigation = undefined
+  chatRequest++
   data = next
+  exitLinkMode()
   entityPreview = undefined
   loadConversation()
   selection = undefined
@@ -160,12 +199,15 @@ function openCase(next: CaseData) {
   $<HTMLInputElement>('case-title').value = history.value.title ?? next.title
   $('scope').hidden = !next.core
   const scopes = Object.keys(next.views ?? {}).filter(id => id !== 'core')
-  $('scope').innerHTML = '<option value="core">核心视图</option><option value="all">全量视图</option>' + scopes
-    .map(id => `<option value="${esc(id)}">${id === 'return' ? '回流视图' : id === 'original' ? '原图视图'
-      : '批次 ' + esc(id.replace(/^batch-/, ''))}</option>`).join('')
+  $('scope').innerHTML = '<option value="core">Core view</option><option value="all">All transfers</option>' + scopes
+    .map(id => `<option value="${esc(id)}">${id === 'return' ? 'Return flows' : id === 'original' ? 'Original view'
+      : 'Batch ' + esc(id.replace(/^batch-/, ''))}</option>`).join('')
   $<HTMLSelectElement>('scope').value = next.core ? 'core' : 'all'
   $('grouped').setAttribute('aria-pressed', 'false')
   updateAssets()
+  updateAddresses()
+  $<HTMLButtonElement>('agent-send').disabled = false
+  $<HTMLTextAreaElement>('agent-question').value = ''
   renderConversation()
   for (const id of ['from', 'to', 'search']) $<HTMLInputElement>(id).value = ''
   $('results').hidden = true
@@ -178,9 +220,42 @@ function updateAssets() {
   const counts = new Map<string, number>()
   for (const name of assets.values()) counts.set(name, (counts.get(name) ?? 0) + 1)
   const select = $<HTMLSelectElement>('asset')
-  select.innerHTML = '<option value="">全部代币</option>' + [...assets].sort((a, b) => a[1].localeCompare(b[1]))
+  select.innerHTML = '<option value="">All tokens</option>' + [...assets].sort((a, b) => a[1].localeCompare(b[1]))
     .map(([id, asset]) => `<option value="${esc(id)}">${esc(asset)}${(counts.get(asset) ?? 0) > 1 ? ' · ' + esc(id.slice(-8)) : ''}</option>`).join('')
   select.value = filters.asset ?? ''
+}
+
+function updateAddresses() {
+  const select = $<HTMLSelectElement>('address-filter')
+  select.innerHTML = '<option value="">All addresses</option>' + [
+    ...history.value.entities.map(entity => [entity.id, entity.name]),
+    ...data.addresses.map(node => [node.id, history.value.names[node.id] ?? node.name]),
+  ].map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('')
+  select.value = filters.address ?? ''
+}
+
+function setAgentOpen(open: boolean) {
+  $('agent-panel').hidden = !open
+  $('agent-toggle').setAttribute('aria-expanded', String(open))
+  renderAgentContext()
+}
+
+function updateLinkStatus() {
+  status(linkSource ? 'Choose the destination node' : 'Choose the source node')
+}
+
+function exitLinkMode() {
+  linking = false
+  linkSource = undefined
+  $('connect').setAttribute('aria-pressed', 'false')
+}
+
+function addRelationship(source: string, target: string, note = '') {
+  const ids = new Set([...data.addresses.map(item => item.id), ...history.value.entities.map(item => item.id)])
+  if (!ids.has(source) || !ids.has(target) || source === target) throw new Error('Choose two distinct nodes in this case')
+  const id = 'relation:' + crypto.randomUUID()
+  edit(edits => { edits.relations.push({ id, source, target, note: note.trim() }) })
+  return id
 }
 
 function eventRows(edge: FlowEdge): string {
@@ -190,11 +265,11 @@ function eventRows(edge: FlowEdge): string {
       <div class="subtle">${esc(item.time)}${item.usd ? ' · $' + esc(item.usd) : ''}</div>
       <code class="mono">${esc(item.hash)}</code>
       <div class="subtle">${esc(item.sources?.join(' · '))}${item.verification ? ' · ' + esc(item.verification) : ''}</div>
-      <button class="ref" data-report="${esc(item.id)}">${item.evidence ? '证据 ' + esc(item.evidence) : '交易来源'}</button>
-      <label>交易备注<textarea data-note="${esc(item.id)}">${esc(history.value.notes[item.id] ?? item.note)}</textarea></label>
+      <button class="ref" data-report="${esc(item.id)}">${item.evidence ? 'Evidence ' + esc(item.evidence) : 'Transaction source'}</button>
+      <label>Transaction note<textarea data-note="${esc(item.id)}">${esc(history.value.notes[item.id] ?? item.note)}</textarea></label>
     </div>`).join('')
   return entries + (edge.events.length > 8
-    ? `<div class="actions"><button data-page="-1" ${page === 0 ? 'disabled' : ''}>上页</button><small>${page + 1} / ${Math.ceil(edge.events.length / 8)}</small><button data-page="1" ${(page + 1) * 8 >= edge.events.length ? 'disabled' : ''}>下页</button></div>` : '')
+    ? `<div class="actions"><button data-page="-1" ${page === 0 ? 'disabled' : ''}>Previous</button><small>${page + 1} / ${Math.ceil(edge.events.length / 8)}</small><button data-page="1" ${(page + 1) * 8 >= edge.events.length ? 'disabled' : ''}>Next</button></div>` : '')
 }
 
 function renderSelection() {
@@ -202,38 +277,37 @@ function renderSelection() {
   const node = selection?.type === 'node' ? view.nodes.find(item => item.id === selection?.id) : undefined
   const edge = selection?.type === 'edge' ? view.edges.find(item => item.id === selection?.id) : undefined
   panel.hidden = !node && !edge
-  const close = (revealed ? '<button data-return-view>返回原视图</button>' : '') + '<button data-close aria-label="关闭详情">×</button>'
+  const close = (revealed ? '<button data-return-view>Return to previous view</button>' : '') + '<button data-close aria-label="Close details">×</button>'
   if (node) {
-    const totals = (direction: 'source' | 'target') => {
-      const rows = new Map<string, { asset: string; amounts: string[] }>()
-      for (const item of view.edges) if (item[direction] === node.id && item.asset) {
-        const assetId = item.events[0].assetId
-        const row = rows.get(assetId) ?? { asset: item.asset, amounts: [] }
-        row.amounts.push(item.amount!)
-        rows.set(assetId, row)
-      }
-      return [...rows.values()].map(row => esc(sumDecimal(row.amounts) + ' ' + row.asset)).join(' · ') || '—'
-    }
-    const balances = latestBalances(data, node.members ?? [node.id], filters.to)
+    const balanceRows = assetsByNode.get(node.id) ?? []
+    const snapshotRecords = latestBalances(data, node.members ?? [node.id], filters.to)
+    const totals = (rows: string[]) => rows.length ? esc(sumDecimal(rows)) : '—'
+    const tokenRows = balanceRows.map(item => `<tr title="${esc(item.id)}"><th>${esc(item.symbol)}</th>
+      <td>${totals(item.incoming)}</td><td>${totals(item.outgoing)}</td><td>${totals(item.balances)}</td>
+      <td>${item.prices.length ? '$' + totals(item.prices) + (item.prices.length < item.snapshots ? ' *' : '') : '—'}</td></tr>`).join('')
     panel.innerHTML = `<div class="section-heading"><h3>${esc(node.name)}</h3>${close}</div><div class="stack">
       <code class="mono">${esc(node.address)}</code>
-      ${node.members ? `<details><summary>成员地址</summary><p class="mono">${node.members.map(id => esc(data.addresses.find(item => item.id === id)?.address)).join('<br>')}</p></details>` : ''}
-      <div class="subtle">流入 ${totals('target')}<br>流出 ${totals('source')}</div>
-      <div class="subtle">余额 ${balances.length ? balances.map(item => `${esc(item.amount)} ${esc(item.asset)} · ${item.usd ? '$' + esc(item.usd) : 'USD 未提供'}<br>${esc(item.time)} · ${esc(item.source)}`).join('<br>') : '暂无快照'}</div>
-      <label>名称<input data-name="${esc(node.id)}" value="${esc(node.name)}"></label>
-      <label>节点备注<textarea data-note="${esc(node.id)}">${esc(history.value.notes[node.id])}</textarea></label>
-      <div class="actions"><button data-direction="in">${hidden.has(node.id + ':in') ? '展开' : '收起'}流入</button><button data-direction="out">${hidden.has(node.id + ':out') ? '展开' : '收起'}流出</button></div>
-      <div class="actions"><button data-neighbors>仅看关联</button>${node.members ? '<button data-ungroup>解除分组</button>'
-        : '<button data-group>归入实体</button><button data-link>添加关系线</button>'}</div>
+      ${node.members ? `<details><summary>Member addresses</summary><p class="mono">${node.members.map(id => esc(data.addresses.find(item => item.id === id)?.address)).join('<br>')}</p></details>` : ''}
+      ${tokenRows ? `<div class="report-table"><table aria-label="Token flows and balances"><thead>
+        <tr><th>Token</th><th>In</th><th>Out</th><th>Balance</th><th>USD</th></tr></thead><tbody>${tokenRows}</tbody></table></div>` : ''}
+      ${snapshotRecords.length ? `<details><summary>Balance sources</summary><ul>${snapshotRecords.map(item =>
+        `<li>${esc(item.asset)} · ${esc(item.time)} · ${esc(item.source)}</li>`).join('')}</ul></details>`
+        : '<p class="subtle">No balance snapshot available</p>'}
+      ${balanceRows.some(item => item.prices.length && item.prices.length < item.snapshots) ? '<p class="subtle">* Partial USD coverage</p>' : ''}
+      <label>Name<input data-name="${esc(node.id)}" value="${esc(node.name)}"></label>
+      <label>Node note<textarea data-note="${esc(node.id)}">${esc(history.value.notes[node.id])}</textarea></label>
+      <div class="actions"><button data-direction="in">${hidden.has(node.id + ':in') ? 'Expand' : 'Collapse'} inflow</button><button data-direction="out">${hidden.has(node.id + ':out') ? 'Expand' : 'Collapse'} outflow</button></div>
+      <div class="actions"><button data-neighbors>Filter to selection</button>${node.members ? '<button data-ungroup>Ungroup</button>'
+        : '<button data-group>Assign to entity</button><button data-link>Add relationship</button>'}</div>
     </div>`
   }
   if (edge) {
     const priced = edge.events.flatMap(item => item.usd === undefined ? [] : [item.usd])
-    const usd = priced.length ? '$' + sumDecimal(priced) + ' · ' + priced.length + '/' + edge.events.length + ' 笔' : '暂无估值'
-    panel.innerHTML = `<div class="section-heading"><h3>${edge.asset ? '交易明细' : '画布关系'}</h3>${close}</div><div class="stack">
+    const usd = priced.length ? '$' + sumDecimal(priced) + ' · ' + priced.length + '/' + edge.events.length + ' priced' : 'No valuation'
+    panel.innerHTML = `<div class="section-heading"><h3>${edge.asset ? 'Transaction details' : 'Relationship'}</h3>${close}</div><div class="stack">
       <div>${esc(view.nodes.find(node => node.id === edge.source)?.name)} → ${esc(view.nodes.find(node => node.id === edge.target)?.name)}</div>
-      ${edge.asset ? `<div class="subtle">${esc(edge.amount)} ${esc(edge.asset)} · ${edge.events.length} 笔<br>USD ${esc(usd)}</div>` : ''}
-      <label>连线备注<textarea data-note="${esc(edge.id)}">${esc(history.value.notes[edge.id] ?? edge.note)}</textarea></label>
+      ${edge.asset ? `<div class="subtle">${esc(edge.amount)} ${esc(edge.asset)} · ${edge.events.length} transfers<br>USD ${esc(usd)}</div>` : ''}
+      <label>Edge note<textarea data-note="${esc(edge.id)}">${esc(history.value.notes[edge.id] ?? edge.note)}</textarea></label>
       ${eventRows(edge)}</div>`
   }
 }
@@ -247,12 +321,13 @@ async function locate(reference: string) {
   await render()
   const item = findReference(reference)
   const edge = item && view.edges.find(edge => edge.events.some(event => event.id === item.id))
+  const directEdge = view.edges.find(edge => edge.id === reference)
   const node = view.nodes.find(node => node.id === reference || node.members?.includes(reference))
-  if (!edge && !node) {
-    status('当前案件没有对应对象')
+  if (!edge && !directEdge && !node) {
+    status('No matching object in this case')
     return
   }
-  selection = edge ? { type: 'edge', id: edge.id } : { type: 'node', id: node!.id }
+  selection = edge || directEdge ? { type: 'edge', id: (edge ?? directEdge)!.id } : { type: 'node', id: node!.id }
   page = edge && item ? Math.floor(edge.events.indexOf(item) / 8) : 0
   await render(false, selection.id)
 }
@@ -264,43 +339,43 @@ function renderReport() {
     const conclusion = conclusionFor(chapter, history.value)
     return `<article>
       <h3>${esc(chapter.title)}</h3><p>${esc(conclusion.text)}</p>
-      ${conclusion.revision ? `<small>结论版本 ${conclusion.revision}</small>` : ''}
-      ${chapter.paragraphs?.length || chapter.tables?.length ? `<details data-chapter="${esc(chapter.id)}"><summary>正文与表格</summary><div></div></details>` : ''}
+      ${conclusion.revision ? `<small>Conclusion version ${conclusion.revision}</small>` : ''}
+      ${chapter.paragraphs?.length || chapter.tables?.length ? `<details data-chapter="${esc(chapter.id)}"><summary>Text and tables</summary><div></div></details>` : ''}
       <div class="actions">${refsMarkup(conclusion.refs.slice(0, 8))}</div>
-      ${conclusion.refs.length > 8 ? `<details data-chapter-refs="${esc(chapter.id)}"><summary>其余引用（${conclusion.refs.length - 8}）</summary><div class="actions"></div></details>` : ''}
+      ${conclusion.refs.length > 8 ? `<details data-chapter-refs="${esc(chapter.id)}"><summary>More references (${conclusion.refs.length - 8})</summary><div class="actions"></div></details>` : ''}
     </article>`
   }).join('')
   const rows = evidence.timeline.slice(timelinePage * 25, (timelinePage + 1) * 25).map(item =>
     `<tr><td>${esc(item.time.slice(0, 19).replace('T', ' '))}</td><td>${esc(item.amount + ' ' + item.asset)}</td><td>${refsMarkup([item.evidence ?? item.id])}</td></tr>`).join('')
   const timeline = rows
-    ? `<div class="report-table"><table><thead><tr><th>时间 UTC</th><th>金额</th><th>证据</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <div class="actions"><button data-timeline="-1" ${timelinePage ? '' : 'disabled'}>上页</button>
+    ? `<div class="report-table"><table><thead><tr><th>Time UTC</th><th>Amount</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="actions"><button data-timeline="-1" ${timelinePage ? '' : 'disabled'}>Previous</button>
       <small>${timelinePage + 1} / ${Math.ceil(evidence.timeline.length / 25)}</small>
-      <button data-timeline="1" ${(timelinePage + 1) * 25 >= evidence.timeline.length ? 'disabled' : ''}>下页</button></div>`
-    : '<p class="subtle">暂无交易</p>'
+      <button data-timeline="1" ${(timelinePage + 1) * 25 >= evidence.timeline.length ? 'disabled' : ''}>Next</button></div>`
+    : '<p class="subtle">No transactions</p>'
   const sources = data.reportSources?.map(([title, items]) =>
     `<h3>${esc(title)}</h3><ul>${items.map(item => `<li>${/^https?:\/\//.test(item)
       ? `<a href="${esc(item)}" target="_blank" rel="noreferrer">${esc(item)}</a>` : esc(item)}</li>`).join('')}</ul>`).join('')
-  const drafts = history.value.drafts.map(draft => `<article><h3>调查草稿</h3><p>${esc(draft.text)}</p>
-    <div class="actions">${refsMarkup(draft.refs)}<button data-edit-draft="${esc(draft.id)}">编辑草稿</button>
-    ${draft.chapter ? `<button data-review-draft="${esc(draft.id)}">预览结论</button>` : ''}</div></article>`).join('')
+  const drafts = history.value.drafts.map(draft => `<article><h3>Investigation draft</h3><p>${esc(draft.text)}</p>
+    <div class="actions">${refsMarkup(draft.refs)}<button data-edit-draft="${esc(draft.id)}">Edit draft</button>
+    ${draft.chapter ? `<button data-review-draft="${esc(draft.id)}">Review conclusion</button>` : ''}</div></article>`).join('')
   const editor = draftEditor ? `<form id="draft-form" class="stack">
-    <label>目标章节<select id="draft-chapter"><option value="">调查草稿</option>${(data.chapters ?? [])
+    <label>Target chapter<select id="draft-chapter"><option value="">Investigation draft</option>${(data.chapters ?? [])
       .map(item => `<option value="${esc(item.id)}" ${item.id === draftEditor?.chapter ? 'selected' : ''}>${esc(item.title)}</option>`).join('')}</select></label>
-    <label>草稿<textarea id="draft-text" aria-label="草稿" required>${esc(draftEditor.text)}</textarea></label>
-    <label>引用（每行一个）<textarea id="draft-refs" aria-label="引用（每行一个）">${esc(draftEditor.refs.join('\n'))}</textarea></label>
-    <button>保存草稿</button><output id="draft-error" role="alert"></output></form>` : ''
+    <label>Draft<textarea id="draft-text" aria-label="Draft" required>${esc(draftEditor.text)}</textarea></label>
+    <label>References (one per line)<textarea id="draft-refs" aria-label="References (one per line)">${esc(draftEditor.refs.join('\n'))}</textarea></label>
+    <button>Save draft</button><output id="draft-error" role="alert"></output></form>` : ''
   const current = review ? conclusionFor(data.chapters?.find(item => item.id === review?.draft.chapter), history.value) : undefined
-  const comparison = review && current ? `<article class="review stack"><h3>结论变更预览</h3>
-    <div><small>当前 · 版本 ${review.revision}</small><p>${esc(current.text)}</p><div class="actions">${refsMarkup(current.refs.slice(0, 8))}</div></div>
-    <div><small>拟更新</small><p>${esc(review.draft.text)}</p><div class="actions">${refsMarkup(review.draft.refs)}</div></div>
-    <div class="actions"><button data-publish>确认更新</button><button data-cancel-review>取消</button></div></article>` : ''
+  const comparison = review && current ? `<article class="review stack"><h3>Conclusion review</h3>
+    <div><small>Current · version ${review.revision}</small><p>${esc(current.text)}</p><div class="actions">${refsMarkup(current.refs.slice(0, 8))}</div></div>
+    <div><small>Proposed</small><p>${esc(review.draft.text)}</p><div class="actions">${refsMarkup(review.draft.refs)}</div></div>
+    <div class="actions"><button data-publish>Publish</button><button data-cancel-review>Cancel</button></div></article>` : ''
   const panel = $('report-content')
-  panel.innerHTML = `<nav class="actions report-tabs" aria-label="报告视图">
-    <button data-report-mode="chapters" aria-pressed="${reportMode === 'chapters'}">章节</button>
-    <button data-report-mode="timeline" aria-pressed="${reportMode === 'timeline'}">交易时间线</button></nav>`
+  panel.innerHTML = `<nav class="actions report-tabs" aria-label="Report view">
+    <button data-report-mode="chapters" aria-pressed="${reportMode === 'chapters'}">Chapters</button>
+    <button data-report-mode="timeline" aria-pressed="${reportMode === 'timeline'}">Timeline</button></nav>`
     + comparison + editor + (reportMode === 'chapters'
-      ? drafts + (chapters || '<p class="subtle">暂无报告章节</p>') + (sources ? `<details><summary>报告来源</summary>${sources}</details>` : '')
+      ? drafts + (chapters || '<p class="subtle">No report chapters</p>') + (sources ? `<details><summary>Report sources</summary>${sources}</details>` : '')
       : timeline)
   panel.querySelectorAll<HTMLDetailsElement>('details[data-chapter], details[data-chapter-refs]').forEach(details => {
     details.addEventListener('toggle', () => {
@@ -325,9 +400,9 @@ function reportEvidence(reference: string) {
   const item = findReference(reference)
   if (!item) return
   $('report-content').insertAdjacentHTML('afterbegin',
-    `<article id="report-evidence" class="flash"><h3>${item.evidence ? '证据 ' + esc(item.evidence) : '交易来源'}</h3>
+    `<article id="report-evidence" class="flash"><h3>${item.evidence ? 'Evidence ' + esc(item.evidence) : 'Transaction source'}</h3>
       <p>${esc(item.amount)} ${esc(item.asset)} · ${esc(item.time)}</p><code class="mono">${esc(item.hash)}</code>
-      <p>${esc(item.sources?.join(' · ') || '来源未提供')}${item.verification ? ' · ' + esc(item.verification) : ''}</p>
+      <p>${esc(item.sources?.join(' · ') || 'Source unavailable')}${item.verification ? ' · ' + esc(item.verification) : ''}</p>
       ${refsMarkup([item.evidence ?? item.id])}</article>`)
   panel.querySelector('#report-evidence')?.scrollIntoView({ block: 'nearest' })
 }
@@ -336,20 +411,20 @@ function renderAgentContext() {
   const context = $('agent-context')
   if (!context) return
   context.textContent = selection ? (view.nodes.find(item => item.id === selection?.id)?.name
-    ?? view.edges.find(item => item.id === selection?.id)?.events[0]?.evidence ?? '所选交易') : '未选择图元素'
+    ?? view.edges.find(item => item.id === selection?.id)?.events[0]?.evidence ?? 'Selected transaction') : 'No selection'
 }
 
 function applyFilters(fit = true) {
   const scope = value('scope')
-  filters = { asset: value('asset') || undefined, from: value('from') || undefined, to: value('to') || undefined,
+  filters = { asset: value('asset') || undefined, address: value('address-filter') || undefined, from: value('from') || undefined, to: value('to') || undefined,
     core: scope === 'core', viewId: scope === 'all' || scope === 'core' ? undefined : scope }
   revealed = undefined
   void render(fit)
 }
 
-for (const id of ['asset', 'scope', 'from', 'to']) $(id).addEventListener('change', () => applyFilters())
+for (const id of ['asset', 'scope', 'from', 'to', 'address-filter']) $(id).addEventListener('change', () => applyFilters())
 $('reset').onclick = () => {
-  for (const id of ['asset', 'from', 'to', 'search']) $<HTMLInputElement>(id).value = ''
+  for (const id of ['asset', 'from', 'to', 'search', 'address-filter']) $<HTMLInputElement>(id).value = ''
   $('results').hidden = true
   hidden.clear()
   applyFilters()
@@ -357,18 +432,41 @@ $('reset').onclick = () => {
 $('demo').onclick = () => {
   openedByUser = true
   openCase(demo)
-  void saveCase().catch(() => status('无法清除已保存的案件'))
+  void saveCase().catch(() => status('Could not clear the saved case'))
 }
 $('new-case').onclick = () => {
   openedByUser = true
-  const blank: CaseData = { id: crypto.randomUUID(), title: 'Ethereum 调查', addresses: [], transfers: [],
-    chapters: [{ id: 'findings', title: '调查结论', text: '', refs: [] }] }
+  const blank: CaseData = { id: crypto.randomUUID(), title: 'Ethereum investigation', addresses: [], transfers: [],
+    chapters: [{ id: 'findings', title: 'Findings', text: '', refs: [] }] }
   openCase(blank)
-  void saveCase(blank).catch(() => status('无法保存新案件'))
+  void saveCase(blank).catch(() => status('Could not save the new case'))
   $('agent-panel').hidden = false
   $('agent-toggle').setAttribute('aria-expanded', 'true')
+  $<HTMLDetailsElement>('collect-controls').open = true
   $('agent-seed').focus()
 }
+$('add-seed').onclick = () => {
+  setAgentOpen(true)
+  $<HTMLDetailsElement>('collect-controls').open = true
+  $('agent-seed').focus()
+}
+$('connect').onclick = () => {
+  if (linking) {
+    exitLinkMode()
+    void render()
+    return
+  }
+  linking = true
+  linkSource = selection?.type === 'node' ? selection.id : undefined
+  $('connect').setAttribute('aria-pressed', 'true')
+  updateLinkStatus()
+}
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && linking) {
+    exitLinkMode()
+    void render()
+  }
+})
 $('import').onclick = () => $('case-file').click()
 $('case-file').addEventListener('change', async event => {
   const input = event.target as HTMLInputElement
@@ -394,6 +492,7 @@ $('case-file').addEventListener('change', async event => {
 $('case-title').addEventListener('change', () => edit(edits => { edits.title = value('case-title').trim() || data.title }))
 function restore() {
   persist()
+  updateAddresses()
   $<HTMLInputElement>('case-title').value = history.value.title ?? data.title
   renderReport()
   void render()
@@ -423,15 +522,21 @@ $('search').addEventListener('input', () => {
   ...data.transfers.filter(item => item.hash.toLowerCase().includes(query) || item.evidence?.toLowerCase() === query)
     .slice(0, 8).map(item => [item.id, item.hash])]
   results.innerHTML = matches.map(([key, label]) => `<button data-focus="${esc(key)}">${esc(label)}</button>`).join('')
-    || '<span class="subtle">没有匹配结果</span>'
+    || '<span class="subtle">No matches</span>'
 })
 $('selection').addEventListener('change', event => {
   const input = event.target as HTMLInputElement
-  if (input.dataset.name) edit(edits => { edits.names[input.dataset.name!] = input.value.trim() })
+  if (input.dataset.name) {
+    edit(edits => { edits.names[input.dataset.name!] = input.value.trim()
+      || data.addresses.find(item => item.id === input.dataset.name)?.name
+      || edits.entities.find(item => item.id === input.dataset.name)?.name || 'Address' })
+    updateAddresses()
+  }
   if (input.dataset.note) {
     // Keep other fields editable if the user tabs directly to a second field.
     history.change(edits => { edits.notes[input.dataset.note!] = input.value })
     persist()
+    void render(false, undefined, false)
   }
 })
 
@@ -489,19 +594,16 @@ document.addEventListener('click', event => {
     renderSelection()
   }
   if (button.dataset.direction && selection) {
-    const key = selection.id + ':' + button.dataset.direction
-    if (hidden.has(key)) hidden.delete(key)
-    else hidden.add(key)
-    revealed = undefined
-    void render()
+    toggleBranch(selection.id, button.dataset.direction === 'in' ? 'in' : 'out')
   }
   if (button.hasAttribute('data-neighbors') && selection) {
     filters.address = selection.id
+    $<HTMLSelectElement>('address-filter').value = selection.id
     revealed = undefined
     void render(true)
   }
   if (button.hasAttribute('data-group') && selection) {
-    const name = prompt('实体名称')?.trim()
+    const name = prompt('Entity name')?.trim()
     if (!name) return
     const member = selection.id
     edit(edits => {
@@ -514,23 +616,25 @@ document.addEventListener('click', event => {
       entity.members.push(member)
       edits.entities = edits.entities.filter(item => item.members.length)
     })
+    updateAddresses()
   }
   if (button.hasAttribute('data-ungroup') && selection) {
     const entityId = selection.id
     edit(edits => { edits.entities = edits.entities.filter(item => item.id !== entityId) })
+    updateAddresses()
   }
   if (button.hasAttribute('data-link') && selection) {
     const source = selection.id
-    const address = prompt('目标地址')?.trim().toLowerCase()
+    const address = prompt('Destination address')?.trim().toLowerCase()
     if (!address) return
     const target = data.addresses.find(item => item.address.toLowerCase() === address)
     if (!target) {
-      status('目标地址不在案件数据中')
+      status('The destination address is outside this case')
       return
     }
-    const note = prompt('关系说明')?.trim()
+    const note = prompt('Relationship note')?.trim()
     if (!note) return
-    edit(edits => { edits.relations.push({ id: 'relation:' + crypto.randomUUID(), source, target: target.id, note }) })
+    if (source !== target.id) addRelationship(source, target.id, note)
   }
 })
 
@@ -561,10 +665,14 @@ $('report').addEventListener('submit', event => {
 })
 
 $('agent-panel').innerHTML = `<div class="stack"><h3>Agent</h3><p id="agent-context" class="subtle"></p>
-  <form id="agent-form" class="stack"><label>调查起点<input id="agent-seed" placeholder="Ethereum 地址或交易哈希"></label>
-    <div class="actions"><button id="agent-start">采集并上图</button><button id="agent-stop" type="button" hidden>停止</button>
-      <button id="agent-analyze" type="button">分析当前对象</button><button id="agent-draft" type="button">起草</button></div>
-  </form><div id="entity-preview"></div><output id="agent-progress" aria-live="polite"></output><div id="agent-messages" class="stack"></div></div>`
+  <form id="agent-chat-form" class="stack"><label>Ask about this selection
+    <textarea id="agent-question" placeholder="Ask about flows, balances or evidence" required></textarea></label>
+    <button id="agent-send">Send</button>
+  </form>
+  <details id="collect-controls"><summary>Collect from Ethereum</summary>
+  <form id="agent-form" class="stack"><label>Investigation seed<input id="agent-seed" placeholder="Ethereum address or transaction hash"></label>
+    <div class="actions"><button id="agent-start">Collect and plot</button><button id="agent-stop" type="button" hidden>Stop</button></div>
+  </form></details><div class="actions"><button id="agent-analyze" type="button">Analyze selection</button><button id="agent-draft" type="button">Draft</button></div><div id="entity-preview"></div><output id="agent-progress" aria-live="polite"></output><div id="agent-messages" class="stack"></div></div>`
 $('agent-toggle').onclick = () => {
   $('agent-panel').hidden = !$('agent-panel').hidden
   $('agent-toggle').setAttribute('aria-expanded', String(!$('agent-panel').hidden))
@@ -584,15 +692,15 @@ function loadConversation() {
 function renderConversation() {
   const messages = $('agent-messages')
   if (!messages) return
-  messages.innerHTML = conversation.slice(-8).map(item => `<div class="agent-message"><p>${esc(item.text)}</p>
+  messages.innerHTML = conversation.slice(-8).map(item => `<div class="agent-message" data-speaker="${item.speaker ?? 'agent'}"><small>${item.speaker === 'user' ? 'You' : 'Agent'}</small><p>${esc(item.text)}</p>
     <div class="actions">${refsMarkup(item.refs.slice(0, 8))}</div></div>`).join('')
   if (!entityPreview) $('entity-preview').replaceChildren()
   updateAgentControls()
 }
 
-function message(text: string, refs: string[] = []) {
-  conversation = [...conversation, { text, refs }].slice(-20)
-  try { localStorage.setItem('flow-agent:' + data.id, JSON.stringify(conversation)) } catch { status('无法保存调查记录') }
+function message(text: string, refs: string[] = [], speaker: 'user' | 'agent' = 'agent') {
+  conversation = [...conversation, { text, refs, speaker }].slice(-20)
+  try { localStorage.setItem('flow-agent:' + data.id, JSON.stringify(conversation)) } catch { status('Could not save the investigation history') }
   renderConversation()
 }
 
@@ -608,10 +716,11 @@ function applyBatch(batch: AnalysisBatch): Promise<Receipt> {
     const result = applyAnalysis(current, batch)
     if (result.data === current) return result.receipt
     await saveCase(result.data)
-    if (data !== current) throw new Error('当前案件已切换')
+    if (data !== current) throw new Error('The active case changed')
     data = result.data
     evidence = indexEvidence(data)
     updateAssets()
+    updateAddresses()
     renderReport()
     keepPositions = true
     await render(!view.nodes.length)
@@ -621,6 +730,37 @@ function applyBatch(batch: AnalysisBatch): Promise<Receipt> {
   analysisQueue = write.catch(() => {})
   return write
 }
+
+function getAgentContext(): AgentContext {
+  const node = selection?.type === 'node' ? view.nodes.find(item => item.id === selection?.id) : undefined
+  return structuredClone({ caseId: data.id, selection, node, filters, transfers: selectedTransfers(),
+    assets: node ? assetsByNode.get(node.id) ?? [] : [] })
+}
+
+$('agent-chat-form').addEventListener('submit', async event => {
+  event.preventDefault()
+  const text = value('agent-question').trim()
+  const button = $<HTMLButtonElement>('agent-send')
+  if (!text || button.disabled) return
+  const request = ++chatRequest
+  const context = getAgentContext()
+  button.disabled = true
+  $<HTMLTextAreaElement>('agent-question').value = ''
+  message(text, [], 'user')
+  try {
+    const reply = agentHandler ? await agentHandler({ question: text, context, history: structuredClone(conversation) })
+      : answerQuestion(text, context)
+    if (request !== chatRequest) return
+    if (typeof reply?.text !== 'string' || !Array.isArray(reply.refs)) throw new Error('Invalid Agent reply')
+    const refs = reply.refs.filter(ref => typeof ref === 'string' && (evidence.get(ref)
+      || data.addresses.some(node => node.id === ref) || history.value.entities.some(entity => entity.id === ref)))
+    message(reply.text, refs)
+  } catch (error) {
+    if (request === chatRequest) message(error instanceof Error ? error.message : 'Agent request failed')
+  } finally {
+    if (request === chatRequest) button.disabled = false
+  }
+})
 
 function selectedTransfers() {
   const edge = view.edges.find(item => item.id === selection?.id)
@@ -633,8 +773,13 @@ $('agent-form').addEventListener('submit', async event => {
   event.preventDefault()
   if (investigation) return
   const seed = value('agent-seed').trim()
-  if (!seed) {
-    updateAgentControls('请输入地址或交易哈希')
+  void collectInvestigation(seed).catch(() => {})
+})
+
+async function collectInvestigation(seed: string) {
+  if (investigation) throw new Error('An investigation is already running')
+  if (!seed.trim()) {
+    updateAgentControls('Enter an address or transaction hash')
     return
   }
   const controller = new AbortController()
@@ -644,28 +789,30 @@ $('agent-form').addEventListener('submit', async event => {
   try {
     const coverage = await provider.investigate(seed, async batch => {
       controller.signal.throwIfAborted()
-      if (caseId !== data.id) throw new Error('当前案件已切换')
+      if (caseId !== data.id) throw new Error('The active case changed')
       if (!batch.transfers.length && !batch.addresses.length && !batch.balances?.length) return
       const receipt = await applyBatch({ schemaVersion: 1, caseId, expectedRevision: data.analysis?.revision ?? 0,
         requestId: crypto.randomUUID(), ...batch })
       for (const transfer of batch.transfers) found.set(transfer.id, transfer)
-      updateAgentControls(`已同步版本 ${receipt.revision} · 新增 ${receipt.added} 笔`)
+      updateAgentControls(`Synced revision ${receipt.revision} · ${receipt.added} new transfers`)
     }, updateAgentControls, controller.signal)
     if (data.id === caseId) message(investigationSummary([...found.values()]) + ' ' + coverage, [...found.keys()])
+    return { refs: [...found.keys()], coverage }
   } catch (error) {
-    if (data.id === caseId) message(controller.signal.aborted ? '调查已停止，已同步的记录保留。'
+    if (data.id === caseId) message(controller.signal.aborted ? 'Investigation stopped. Synced records were saved.'
       : error instanceof Error ? error.message : String(error), [...found.keys()])
+    throw error
   } finally {
     if (investigation === controller) {
       investigation = undefined
       updateAgentControls()
     }
   }
-})
+}
 $('agent-stop').onclick = () => investigation?.abort()
 $('agent-analyze').onclick = () => {
   const transfers = selectedTransfers()
-  message(investigationSummary(transfers), transfers.map(item => item.evidence ?? item.id))
+  message(investigationSummary(transfers), transfers.slice(0, 30).map(item => item.evidence ?? item.id))
 }
 $('agent-draft').onclick = () => {
   const last = [...conversation].reverse().find(item => item.refs.length)
@@ -683,6 +830,9 @@ type CanvasCommand =
   | { action: 'rename' | 'note'; id: string; text: string }
   | { action: 'move'; id: string; position: Point }
   | { action: 'bend'; id: string; offset: number }
+  | { action: 'rename_case'; text: string }
+  | { action: 'connect'; source: string; target: string; note?: string }
+  | { action: 'disconnect'; id: string }
   | { action: 'undo' | 'redo' }
 
 function previewEntity(name: string, members: string[]) {
@@ -690,9 +840,9 @@ function previewEntity(name: string, members: string[]) {
   entityPreview = { caseId: data.id, state: history.value, name: name.trim(), members: entries.map(entry => entry.id) }
   $('agent-panel').hidden = false
   $('agent-toggle').setAttribute('aria-expanded', 'true')
-  $('entity-preview').innerHTML = `<div class="stack"><h3>实体归属预览</h3><p>${esc(name)}</p><ul>${entries
-    .map(item => `<li>${esc(item.id)} · ${esc(item.previous ?? '未分组')} → ${esc(name)}</li>`).join('')}</ul>
-    <div class="actions"><button id="entity-confirm">确认归组</button><button id="entity-cancel">取消</button></div></div>`
+  $('entity-preview').innerHTML = `<div class="stack"><h3>Entity assignment review</h3><p>${esc(name)}</p><ul>${entries
+    .map(item => `<li>${esc(item.id)} · ${esc(item.previous ?? 'Unassigned')} → ${esc(name)}</li>`).join('')}</ul>
+    <div class="actions"><button id="entity-confirm">Confirm assignment</button><button id="entity-cancel">Cancel</button></div></div>`
   $('entity-confirm').onclick = confirmEntity
   $('entity-cancel').onclick = () => { entityPreview = undefined; $('entity-preview').replaceChildren() }
   return entries
@@ -703,7 +853,7 @@ function confirmEntity() {
   entityPreview = undefined
   $('entity-preview').replaceChildren()
   if (!proposal || proposal.caseId !== data.id || proposal.state !== history.value) {
-    message('画布编辑状态已改变，请重新预览实体归属。')
+    message('The canvas changed. Review the assignment again.')
     return
   }
   edit(edits => {
@@ -716,26 +866,61 @@ function confirmEntity() {
     entity.members.push(...proposal.members)
     edits.entities = edits.entities.filter(item => item.members.length)
   })
-  message('已更新实体归属 · ' + proposal.name, proposal.members)
+  updateAddresses()
+  message('Entity assignment updated · ' + proposal.name, proposal.members)
 }
 
 Object.assign(window, {
   maliciousFlow: Object.freeze({
     apply_analysis: applyBatch,
-    set_view: async (input?: string | { ref?: string; filters?: Filters }) => {
+    collect: collectInvestigation,
+    stop_collection: () => investigation?.abort(),
+    get_selection: getAgentContext,
+    show_evidence: (ref: string) => {
+      const item = evidence.get(ref)
+      if (!item) throw new Error('Unknown evidence reference')
+      reportEvidence(item.id)
+      return structuredClone(item)
+    },
+    set_agent_handler: (handler?: AgentHandler) => {
+      if (handler !== undefined && typeof handler !== 'function') throw new Error('Invalid Agent handler')
+      agentHandler = handler
+    },
+    set_view: async (input?: string | { ref?: string; filters?: Filters; grouped?: boolean;
+      branch?: { id: string; direction: 'in' | 'out'; collapsed: boolean }; fit?: boolean; zoom?: number; pan?: Point; clearSelection?: boolean }) => {
       const ref = typeof input === 'string' ? input : input?.ref
-      if (typeof input === 'object' && input.filters) {
-        filters = { ...input.filters }
-        updateAssets()
-        $<HTMLInputElement>('from').value = filters.from?.slice(0, 10) ?? ''
-        $<HTMLInputElement>('to').value = filters.to?.slice(0, 10) ?? ''
-        $<HTMLSelectElement>('scope').value = filters.viewId ?? (filters.core ? 'core' : 'all')
-        revealed = undefined
-        await render()
+      if (input && typeof input === 'object') {
+        if (input.filters) {
+          filters = { ...input.filters }
+          updateAssets()
+          updateAddresses()
+          $<HTMLInputElement>('from').value = filters.from?.slice(0, 10) ?? ''
+          $<HTMLInputElement>('to').value = filters.to?.slice(0, 10) ?? ''
+          $<HTMLSelectElement>('scope').value = filters.viewId ?? (filters.core ? 'core' : 'all')
+          revealed = undefined
+        }
+        if (input.grouped !== undefined) {
+          grouped = input.grouped
+          $('grouped').setAttribute('aria-pressed', String(grouped))
+        }
+        if (input.branch) {
+          const key = input.branch.id + ':' + input.branch.direction
+          if (input.branch.collapsed) hidden.add(key)
+          else hidden.delete(key)
+          revealed = undefined
+        }
+        if (input.clearSelection) {
+          selection = undefined
+          revealed = undefined
+        }
+        await render(input.fit)
+        if (input.zoom !== undefined && Number.isFinite(input.zoom)) await graph.zoomTo(input.zoom)
+        if (input.pan?.length === 2 && input.pan.every(Number.isFinite)) await graph.translateBy(input.pan)
+        updateHandle()
       }
       if (ref) await locate(ref)
       return { caseId: data.id, revision: data.analysis?.revision ?? 0, selection: selection && { ...selection }, filters: { ...filters },
-        visibleNodes: view.nodes.length, visibleTransfers: view.count }
+        visibleNodes: view.nodes.length, visibleTransfers: view.count, grouped, zoom: graph.getZoom() }
     },
     edit_canvas: (command: CanvasCommand) => {
       if (command.action === 'undo' || command.action === 'redo') {
@@ -743,7 +928,18 @@ Object.assign(window, {
         restore()
         return
       }
-      if (!('id' in command)) throw new Error('当前命令无效')
+      if (command.action === 'rename_case') {
+        edit(edits => { edits.title = command.text.trim() || data.title })
+        $<HTMLInputElement>('case-title').value = history.value.title!
+        return
+      }
+      if (command.action === 'connect') return addRelationship(command.source, command.target, command.note)
+      if (command.action === 'disconnect') {
+        if (!history.value.relations.some(item => item.id === command.id)) throw new Error('Unknown relationship')
+        edit(edits => { edits.relations = edits.relations.filter(item => item.id !== command.id) })
+        return
+      }
+      if (!('id' in command)) throw new Error('Invalid command')
       const node = view.nodes.find(item => item.id === command.id)
       const edge = view.edges.find(item => item.id === command.id)
       const event = evidence.get(command.id)
@@ -752,7 +948,7 @@ Object.assign(window, {
       else if (command.action === 'move' && node && command.position?.length === 2 && command.position.every(Number.isFinite)) {
         edit(edits => { edits.positions[node.id] = [...command.position] })
       } else if (command.action === 'bend' && edge && Number.isFinite(command.offset)) edit(edits => { edits.bends[edge.id] = command.offset })
-      else throw new Error('当前命令或目标对象无效')
+      else throw new Error('Invalid command or target')
     },
     edit_entity: (input: { name: string; members: string[] }) => previewEntity(input.name, input.members),
     edit_report: (input: Omit<Draft, 'id'>) => {

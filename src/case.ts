@@ -109,26 +109,26 @@ export function transact(previous: CaseData, incoming: Pick<CaseData, 'addresses
   const addresses = new Map(previous.addresses.map(item => [item.id, item]))
   const transfers = new Map(previous.transfers.map(item => [item.id, item]))
   for (const item of incoming.addresses) {
-    if (!item.id || typeof item.address !== 'string' || typeof item.name !== 'string') throw new Error('地址数据无效')
+    if (!item.id || typeof item.address !== 'string' || typeof item.name !== 'string') throw new Error('Invalid address')
     addresses.set(item.id, item)
   }
   for (const item of incoming.transfers) {
     if (!item.id || !item.hash || !item.assetId || !addresses.has(item.source) || !addresses.has(item.target)
       || typeof item.asset !== 'string' || (item.usd !== undefined && (typeof item.usd !== 'string' || !/^\d+(\.\d+)?$/.test(item.usd)))
       || !Number.isFinite(Date.parse(item.time)) || typeof item.amount !== 'string' || !/^\d+(\.\d+)?$/.test(item.amount)) {
-      throw new Error('交易记录无效 ' + item.id)
+      throw new Error('Invalid transfer ' + item.id)
     }
     const existing = transfers.get(item.id)
     if (existing && (existing.source !== item.source || existing.target !== item.target || existing.hash !== item.hash
       || existing.assetId !== item.assetId || Date.parse(existing.time) !== Date.parse(item.time)
-      || sumDecimal([existing.amount]) !== sumDecimal([item.amount]))) throw new Error('事件 ID 冲突 ' + item.id)
+      || sumDecimal([existing.amount]) !== sumDecimal([item.amount]))) throw new Error('Event ID conflict ' + item.id)
     transfers.set(item.id, { ...existing, ...item, sources: [...new Set([...(existing?.sources ?? []), ...(item.sources ?? [])])] })
   }
   const balances = new Map((previous.balances ?? []).map(item => [JSON.stringify([item.addressId, item.assetId, item.time]), item]))
   for (const item of incoming.balances ?? []) {
     if (!addresses.has(item.addressId) || !item.assetId || !item.source || !Number.isFinite(Date.parse(item.time))
       || !/^\d+(\.\d+)?$/.test(item.amount) || (item.usd !== undefined && !/^\d+(\.\d+)?$/.test(item.usd))) {
-      throw new Error('余额快照无效 ' + item.addressId)
+      throw new Error('Invalid balance snapshot ' + item.addressId)
     }
     balances.set(JSON.stringify([item.addressId, item.assetId, item.time]), item)
   }
@@ -146,9 +146,11 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
     if (!members.length) continue
     for (const id of members) mapping.set(id, entity.id)
     nodes.set(entity.id, { id: entity.id, name: edits.names[entity.id] ?? entity.name,
-      address: members.length + ' 个地址', role: '实体', members,
+      address: members.length + ' addresses', role: 'Entity', members,
       column: Math.min(...members.map(id => nodes.get(id)?.column ?? 0)) })
   }
+  const filterAddresses = filters.address ? new Set([filters.address,
+    ...(edits.entities.find(entity => entity.id === filters.address)?.members ?? [])]) : undefined
   const groups = new Map<string, FlowEdge>()
   const visible = new Set<string>()
   const from = filters.from ? Date.parse(filters.from) : -Infinity
@@ -160,7 +162,7 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
     const forced = event.id === reveal || event.evidence === reveal && !!reveal
     const time = Date.parse(event.time)
     if (!forced && ((core && !core.has(event.id)) || (filters.asset && event.assetId !== filters.asset)
-      || time < from || time >= to || (filters.address && ![event.source, event.target, source, target].includes(filters.address))
+      || time < from || time >= to || (filterAddresses && ![event.source, event.target, source, target].some(id => filterAddresses.has(id)))
       || hidden.has(source + ':out') || hidden.has(target + ':in'))) continue
     count++
     visible.add(source)
@@ -182,7 +184,7 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
     const source = mapping.get(relation.source) ?? relation.source
     const target = mapping.get(relation.target) ?? relation.target
     if (!nodes.has(source) || !nodes.has(target)) continue
-    if (filters.address && filters.address !== source && filters.address !== target) continue
+    if (filterAddresses && ![relation.source, relation.target, source, target].some(id => filterAddresses.has(id))) continue
     visible.add(source)
     visible.add(target)
     groups.set(relation.id, { ...relation, source, target, events: [] })

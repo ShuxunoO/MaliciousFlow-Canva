@@ -12,7 +12,7 @@ type Publish = (batch: Collected) => Promise<void>
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>
 
 export function toDecimal(raw: string, decimals: number): string {
-  if (!/^\d+$/.test(raw) || !Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error('链上金额或精度无效')
+  if (!/^\d+$/.test(raw) || !Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error('Invalid on-chain amount or precision')
   const integer = BigInt(raw).toString()
   if (!decimals) return integer
   const digits = integer.padStart(decimals + 1, '0')
@@ -42,8 +42,16 @@ export function blockscout(baseUrl = 'https://eth.blockscout.com/api/v2', reques
   const base = baseUrl.replace(/\/$/, '')
   const get = async <T>(path: string, signal?: AbortSignal): Promise<T> => {
     const timeout = AbortSignal.timeout(20_000)
-    const response = await request(base + path, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout, headers: { Accept: 'application/json' } })
-    if (!response.ok) throw new Error('Blockscout 查询失败（HTTP ' + response.status + '）')
+    const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout
+    const init = { signal: requestSignal, headers: { Accept: 'application/json' } }
+    let response = await request(base + path, init)
+    if (response.status === 502 || response.status === 503 || response.status === 504 || response.status === 500) {
+      await response.body?.cancel()
+      await new Promise<void>(resolve => setTimeout(resolve, 500))
+      requestSignal.throwIfAborted()
+      response = await request(base + path, init)
+    }
+    if (!response.ok) throw new Error('Blockscout request failed (HTTP ' + response.status + ')')
     return response.json()
   }
   const external = (item: Transaction): Transfer | undefined => {
@@ -71,7 +79,7 @@ export function blockscout(baseUrl = 'https://eth.blockscout.com/api/v2', reques
     for (let index = 0; index < 2; index++) {
       const suffix = cursor.size ? '?' + cursor.toString() : ''
       const page = await get<Page<T>>(path + suffix, signal)
-      if (!Array.isArray(page.items)) throw new Error('Blockscout 分页响应无效')
+      if (!Array.isArray(page.items)) throw new Error('Invalid Blockscout page response')
       await handle(page.items)
       if (!page.next_page_params) return false
       for (const [key, value] of Object.entries(page.next_page_params)) if (value != null) cursor.set(key, String(value))
@@ -80,20 +88,20 @@ export function blockscout(baseUrl = 'https://eth.blockscout.com/api/v2', reques
   }
   async function investigate(input: string, publish: Publish, status: (message: string) => void, signal?: AbortSignal) {
     const seed = input.trim().toLowerCase()
-    if (!/^0x(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(seed)) throw new Error('请输入 Ethereum 地址或交易哈希')
+    if (!/^0x(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(seed)) throw new Error('Enter an Ethereum address or transaction hash')
     if (seed.length === 66) {
       const endpoint = '/transactions/' + seed
-      status('查询主交易')
+      status('Fetching the transaction')
       const transaction = await get<Transaction>(endpoint, signal)
-      if (transaction.status !== 'ok' || !transaction.timestamp) throw new Error('该交易尚未成功确认')
+      if (transaction.status !== 'ok' || !transaction.timestamp) throw new Error('The transaction is pending or failed')
       await publish(collect([external(transaction)], [transaction.from, transaction.to, transaction.created_contract]))
-      status('查询 ERC-20 转账日志')
+      status('Fetching ERC-20 transfer logs')
       const partial = await pages<TokenEvent>(endpoint + '/token-transfers', async rows =>
         publish(collect(rows.map(token), rows.flatMap(item => [item.from, item.to]))), signal)
-      return partial ? '已读取 ERC-20 日志的前两页，来源还有更多记录。' : '已读取该交易的原生转账与 ERC-20 日志。'
+      return partial ? 'Fetched the first two pages of ERC-20 logs. More records are available.' : 'Fetched the native transfer and ERC-20 logs.'
     }
     const endpoint = '/addresses/' + seed
-    status('查询地址及余额快照')
+    status('Fetching the address and balance snapshot')
     const account = await get<Account>(endpoint, signal)
     const address = toAddress(account)
     const balance = account.coin_balance
@@ -102,15 +110,15 @@ export function blockscout(baseUrl = 'https://eth.blockscout.com/api/v2', reques
       time: new Date().toISOString(), source: base + endpoint, usd: estimatedUsd(balance, account.exchange_rate),
     }] : []
     await publish({ addresses: [address], transfers: [], balances })
-    status('查询近期原生 ETH 转账')
+    status('Fetching recent native ETH transfers')
     const partialNative = await pages<Transaction>(endpoint + '/transactions', async rows =>
       publish(collect(rows.map(external), rows.flatMap(item => [item.from, item.to, item.created_contract]))), signal)
     const partialToken = account.has_token_transfers !== false && await (async () => {
-      status('查询近期 ERC-20 转账')
+      status('Fetching recent ERC-20 transfers')
       return pages<TokenEvent>(endpoint + '/token-transfers', async rows =>
         publish(collect(rows.map(token), rows.flatMap(item => [item.from, item.to]))), signal)
     })()
-    return partialNative || partialToken ? '已读取最近两页或更少记录，来源还有更多记录。' : '已读取数据源返回的原生 ETH 与 ERC-20 转账。'
+    return partialNative || partialToken ? 'Fetched up to two recent pages. More records are available.' : 'Fetched the native ETH and ERC-20 transfers returned by the provider.'
   }
   return { investigate }
 }

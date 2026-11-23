@@ -21,12 +21,12 @@ export function indexEvidence(data: CaseData) {
 
 export function validateDraft(draft: Draft, data: CaseData, edits: Edits): Draft {
   const text = draft.text.trim()
-  if (!text) throw new Error('请输入草稿内容')
+  if (!text) throw new Error('Enter draft text')
   const references = indexEvidence(data)
   const objects = new Set([...data.addresses.map(item => item.id), ...edits.entities.map(item => item.id)])
   const refs = [...new Set(draft.refs.map(ref => ref.trim()).filter(Boolean))]
-  for (const ref of refs) if (!references.get(ref) && !objects.has(ref)) throw new Error('找不到引用 ' + ref)
-  if (draft.chapter && !data.chapters?.some(chapter => chapter.id === draft.chapter)) throw new Error('找不到目标章节')
+  for (const ref of refs) if (!references.get(ref) && !objects.has(ref)) throw new Error('Unknown reference ' + ref)
+  if (draft.chapter && !data.chapters?.some(chapter => chapter.id === draft.chapter)) throw new Error('Unknown target chapter')
   return { ...draft, text, refs }
 }
 
@@ -37,9 +37,9 @@ export function conclusionFor(chapter: Chapter | undefined, edits: Edits): Concl
 export function publishConclusion(edits: Edits, draft: Draft, data: CaseData, expected: number, publishedAt: string) {
   const checked = validateDraft(draft, data, edits)
   const chapter = data.chapters?.find(item => item.id === checked.chapter)
-  if (!chapter) throw new Error('请选择目标章节')
+  if (!chapter) throw new Error('Select a target chapter')
   const current = conclusionFor(chapter, edits)
-  if (current.revision !== expected) throw new Error('报告结论已更新，请重新预览')
+  if (current.revision !== expected) throw new Error('The conclusion changed. Review the draft again.')
   edits.conclusions = Object.assign({}, edits.conclusions, {
     [chapter.id]: {
       revision: current.revision + 1,

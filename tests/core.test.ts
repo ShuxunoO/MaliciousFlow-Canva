@@ -20,7 +20,7 @@ describe('case', () => {
     const existing = demo.transfers[0]
     const added = { ...existing, id: 'another' }
     expect(transact(demo, { addresses: [], transfers: [added, added] }).transfers).toHaveLength(7)
-    expect(() => transact(demo, { addresses: [], transfers: [{ ...existing, amount: '900' }] })).toThrow('事件 ID 冲突')
+    expect(() => transact(demo, { addresses: [], transfers: [{ ...existing, amount: '900' }] })).toThrow('Event ID conflict')
     expect(demo.transfers[0].amount).toBe('18.5')
   })
 
