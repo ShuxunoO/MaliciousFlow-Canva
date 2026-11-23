@@ -12,7 +12,7 @@ The application exposes `window.maliciousFlow` to JavaScript running in the canv
 | `stop_collection()` | None | Aborts an ongoing provider request. Previously committed results remain available |
 | `apply_analysis(batch)` | Versioned batch | Resolves to a receipt after writing the batch and updating the graph |
 | `edit_canvas(command)` | Canvas edit described below | Changes the active case. `connect` returns the new relationship ID |
-| `edit_entity({ name, members })` | Entity name and address IDs | Shows the proposed membership in the Agent panel and returns the proposed changes. The user confirms or cancels |
+| `edit_entity({ name, members, replaceId? })` | Entity name and address IDs | Shows the proposed membership in the Agent panel and returns the proposed changes. The user confirms or cancels. Set `replaceId` to replace the members of an existing entity. An empty replacement ungroups it |
 | `edit_report({ text, refs, chapter })` | Draft text, reference IDs and optional chapter ID | Saves a cited draft and returns its ID and references. The user reviews the proposed conclusion before publishing |
 | `show_evidence(ref)` | Transaction event ID or evidence ID | Opens the evidence in the report pane and returns a copy of the transaction |
 | `set_agent_handler(handler?)` | Function or `undefined` | Installs an Agent integration or restores the built-in rule-based responder |

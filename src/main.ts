@@ -1,6 +1,6 @@
 import { History, latestBalances, project, sumDecimal } from './case'
 import type { CaseData, Draft, Edits, Filters, FlowEdge, HistorySnapshot, Point } from './case'
-import { applyAnalysis, entityMembers, investigationSummary, type AnalysisBatch, type Receipt } from './investigation'
+import { applyAnalysis, applyEntityMembership, entityMembers, investigationSummary, type AnalysisBatch, type Receipt } from './investigation'
 import { blockscout, type Collected } from './blockscout'
 import { traceTransfers, type TraceOptions } from './trace'
 import { answerQuestion, type AgentContext, type AgentHandler } from './agent-context'
@@ -81,7 +81,7 @@ type AgentMessage = { text: string; refs: string[]; speaker?: 'user' | 'agent' }
 let agentHandler: AgentHandler | undefined
 let chatRequest = 0
 let conversation: AgentMessage[] = []
-let entityPreview: { caseId: string; state: Edits; name: string; members: string[] } | undefined
+let entityPreview: { caseId: string; state: Edits; name: string; members: string[]; id: string; replace: boolean } | undefined
 const provider = blockscout(import.meta.env.VITE_BLOCKSCOUT_URL || undefined)
 const graph = makeGraph($('graph'), setSelection, (id, point) => {
   keepPositions = true
@@ -306,7 +306,7 @@ function renderSelection() {
       <label>Name<input data-name="${esc(node.id)}" value="${esc(node.name)}"></label>
       <label>Node note<textarea data-note="${esc(node.id)}">${esc(history.value.notes[node.id])}</textarea></label>
       <div class="actions"><button data-direction="in">${hidden.has(node.id + ':in') ? 'Expand' : 'Collapse'} inflow</button><button data-direction="out">${hidden.has(node.id + ':out') ? 'Expand' : 'Collapse'} outflow</button></div>
-      <div class="actions"><button data-neighbors>Filter to selection</button>${node.members ? '<button data-ungroup>Ungroup</button>'
+      <div class="actions"><button data-neighbors>Filter to selection</button>${node.members ? '<button data-members>Edit members</button><button data-ungroup>Ungroup</button>'
         : '<button data-group>Assign to entity</button><button data-link>Add relationship</button>'}</div>
     </div>`
   }
@@ -614,23 +614,23 @@ document.addEventListener('click', event => {
   if (button.hasAttribute('data-group') && selection) {
     const name = prompt('Entity name')?.trim()
     if (!name) return
-    const member = selection.id
-    edit(edits => {
-      for (const entity of edits.entities) entity.members = entity.members.filter(id => id !== member)
-      let entity = edits.entities.find(item => item.name === name)
-      if (!entity) {
-        entity = { id: 'entity:' + crypto.randomUUID(), name, members: [] }
-        edits.entities.push(entity)
-      }
-      entity.members.push(member)
-      edits.entities = edits.entities.filter(item => item.members.length)
-    })
-    updateAddresses()
+    previewEntity(name, [selection.id])
   }
-  if (button.hasAttribute('data-ungroup') && selection) {
-    const entityId = selection.id
-    edit(edits => { edits.entities = edits.entities.filter(item => item.id !== entityId) })
-    updateAddresses()
+  if ((button.hasAttribute('data-members') || button.hasAttribute('data-ungroup')) && selection) {
+    const entity = history.value.entities.find(item => item.id === selection?.id)
+    if (entity) {
+      const input = button.hasAttribute('data-ungroup') ? '' : prompt(
+        'Member address IDs or full addresses, separated by commas', entity.members.join(', '))
+      if (input !== null) {
+        const members = input.split(',').map(value => value.trim()).filter(Boolean).map(value =>
+          data.addresses.find(node => node.address.toLowerCase() === value.toLowerCase())?.id ?? value)
+        try {
+          previewEntity(entity.name, members, entity.id)
+        } catch (error) {
+          status(error instanceof Error ? error.message : String(error))
+        }
+      }
+    }
   }
   if (button.hasAttribute('data-link') && selection) {
     const source = selection.id
@@ -879,13 +879,19 @@ type CanvasCommand =
   | { action: 'disconnect'; id: string }
   | { action: 'undo' | 'redo' }
 
-function previewEntity(name: string, members: string[]) {
-  const entries = entityMembers(data, history.value, name, members)
-  entityPreview = { caseId: data.id, state: history.value, name: name.trim(), members: entries.map(entry => entry.id) }
-  $('agent-panel').hidden = false
-  $('agent-toggle').setAttribute('aria-expanded', 'true')
+function previewEntity(name: string, members: string[], replaceId?: string) {
+  const existing = replaceId ? history.value.entities.find(entity => entity.id === replaceId)
+    : history.value.entities.find(entity => entity.name === name.trim())
+  if (replaceId && !existing) throw new Error('Unknown entity')
+  const entries = members.length || !replaceId ? entityMembers(data, history.value, name, members) : []
+  const removed = replaceId ? (existing?.members ?? []).filter(member => !members.includes(member)) : []
+  const target = existing?.id ?? 'entity:' + crypto.randomUUID()
+  entityPreview = { caseId: data.id, state: history.value, name: name.trim(),
+    members: entries.map(entry => entry.id), id: target, replace: !!replaceId }
+  setAgentOpen(true)
   $('entity-preview').innerHTML = `<div class="stack"><h3>Entity assignment review</h3><p>${esc(name)}</p><ul>${entries
-    .map(item => `<li>${esc(item.id)} · ${esc(item.previous ?? 'Unassigned')} → ${esc(name)}</li>`).join('')}</ul>
+    .map(item => `<li>${esc(item.id)} · ${esc(item.previous ?? 'Unassigned')} → ${esc(name)}</li>`).join('')}
+    ${removed.map(id => `<li>${esc(id)} · ${esc(name)} → Unassigned</li>`).join('')}</ul>
     <div class="actions"><button id="entity-confirm">Confirm assignment</button><button id="entity-cancel">Cancel</button></div></div>`
   $('entity-confirm').onclick = confirmEntity
   $('entity-cancel').onclick = () => { entityPreview = undefined; $('entity-preview').replaceChildren() }
@@ -900,16 +906,9 @@ function confirmEntity() {
     message('The canvas changed. Review the assignment again.')
     return
   }
-  edit(edits => {
-    for (const entity of edits.entities) entity.members = entity.members.filter(id => !proposal.members.includes(id))
-    let entity = edits.entities.find(item => item.name === proposal.name)
-    if (!entity) {
-      entity = { id: 'entity:' + crypto.randomUUID(), name: proposal.name, members: [] }
-      edits.entities.push(entity)
-    }
-    entity.members.push(...proposal.members)
-    edits.entities = edits.entities.filter(item => item.members.length)
-  })
+  edit(edits => applyEntityMembership(edits, proposal.name, proposal.members, proposal.id, proposal.replace))
+  if (filters.address && !data.addresses.some(node => node.id === filters.address)
+    && !history.value.entities.some(item => item.id === filters.address)) filters.address = undefined
   updateAddresses()
   message('Entity assignment updated · ' + proposal.name, proposal.members)
 }
@@ -995,7 +994,7 @@ Object.assign(window, {
       } else if (command.action === 'bend' && edge && Number.isFinite(command.offset)) edit(edits => { edits.bends[edge.id] = command.offset })
       else throw new Error('Invalid command or target')
     },
-    edit_entity: (input: { name: string; members: string[] }) => previewEntity(input.name, input.members),
+    edit_entity: (input: { name: string; members: string[]; replaceId?: string }) => previewEntity(input.name, input.members, input.replaceId),
     edit_report: (input: Omit<Draft, 'id'>) => {
       const draft = validateDraft({ ...input, id: crypto.randomUUID() }, data, history.value)
       edit(edits => { edits.drafts.push(draft) })

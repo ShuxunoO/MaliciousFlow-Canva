@@ -55,3 +55,17 @@ export function entityMembers(data: CaseData, edits: import('./case').Edits, nam
   if (!name.trim() || !unique.length || unique.some(id => !addresses.has(id))) throw new Error('Invalid entity name or members')
   return unique.map(id => ({ id, previous: edits.entities.find(entity => entity.members.includes(id))?.name }))
 }
+
+export function applyEntityMembership(edits: import('./case').Edits, name: string, members: string[], id: string, replace = false) {
+  const target = edits.entities.find(entity => entity.id === id)
+  const moving = new Set(members)
+  for (const entity of edits.entities) {
+    if (entity.id !== id) entity.members = entity.members.filter(member => !moving.has(member))
+  }
+  if (target) {
+    target.members = replace ? [...moving] : [...new Set([...target.members, ...moving])]
+  } else {
+    edits.entities.push({ id, name, members: [...moving] })
+  }
+  edits.entities = edits.entities.filter(entity => entity.members.length)
+}

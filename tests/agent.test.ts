@@ -67,3 +67,14 @@ describe('analysis synchronization', () => {
     expect(() => applyAnalysis(demo, { ...batch, transfers: batch.transfers.map(event => ({ ...event, sources: [] })) })).toThrow('require a source')
   })
 })
+
+it('replaces entity members and removes memberships from previous entities exactly once', async () => {
+  const { applyEntityMembership } = await import('../src/investigation')
+  const { emptyEdits } = await import('../src/case')
+  const state = emptyEdits()
+  state.entities = [{ id: 'a', name: 'A', members: ['origin', 'alpha'] }, { id: 'b', name: 'B', members: ['beta'] }]
+  applyEntityMembership(state, 'A', ['beta', 'beta'], 'a', true)
+  expect(state.entities).toEqual([{ id: 'a', name: 'A', members: ['beta'] }])
+  applyEntityMembership(state, 'A', [], 'a', true)
+  expect(state.entities).toEqual([])
+})
