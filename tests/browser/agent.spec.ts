@@ -84,3 +84,34 @@ test('hands the current selection and question to an external Agent handler', as
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.locator('#agent-messages')).toContainText('External reply 12.75 ETH')
 })
+
+test('follows a downstream transfer and opens its evidence from the Agent result', async ({ page }) => {
+  const seed = '0x' + '1'.repeat(64)
+  const next = '0x' + '2'.repeat(64)
+  const from = { hash: '0x' + 'a'.repeat(40) }
+  const relay = { hash: '0x' + 'b'.repeat(40) }
+  const to = { hash: '0x' + 'c'.repeat(40) }
+  const first = { hash: seed, from, to: relay, value: '1000000000000000000', status: 'ok', timestamp: '2020-11-23T12:00:00Z' }
+  const second = { hash: next, from: relay, to, value: '2000000000000000000', status: 'ok', timestamp: '2020-11-23T12:01:00Z' }
+  await page.route('https://eth.blockscout.com/api/v2/**', async route => {
+    const url = route.request().url()
+    if (url.endsWith('/transactions/' + seed)) return route.fulfill({ json: first })
+    if (url.endsWith('/token-transfers')) return route.fulfill({ json: { items: [] } })
+    if (url.endsWith('/addresses/' + relay.hash)) return route.fulfill({ json: { ...relay, has_token_transfers: false } })
+    if (url.endsWith('/addresses/' + relay.hash + '/transactions')) return route.fulfill({ json: { items: [first, second] } })
+    return route.fulfill({ status: 404 })
+  })
+  await page.goto('/')
+  await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
+  await page.getByRole('button', { name: 'New investigation' }).click()
+  await page.getByLabel('Investigation seed').fill(seed)
+  await page.getByLabel('Direction').selectOption('downstream')
+  await page.getByLabel('Hops').selectOption('2')
+  await page.getByRole('button', { name: 'Collect and plot' }).click()
+  await expect(page.locator('#status')).toContainText('2 transfers')
+  await expect(page.locator('#agent-messages')).toContainText('Downstream search, up to 2 hops')
+  await page.screenshot({ path: test.info().outputPath('downstream-trace.png') })
+  await page.locator('#agent-messages').getByRole('button', { name: '1:' + next + ':external' }).click()
+  await expect(page.getByRole('heading', { name: 'Transaction details' })).toBeVisible()
+  await expect(page.getByRole('complementary', { name: 'Selection details' })).toContainText(next)
+})

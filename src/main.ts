@@ -1,7 +1,8 @@
 import { History, latestBalances, project, sumDecimal } from './case'
 import type { CaseData, Draft, Edits, Filters, FlowEdge, Point } from './case'
 import { applyAnalysis, entityMembers, investigationSummary, type AnalysisBatch, type Receipt } from './investigation'
-import { blockscout } from './blockscout'
+import { blockscout, type Collected } from './blockscout'
+import { traceTransfers, type TraceOptions } from './trace'
 import { answerQuestion, type AgentContext, type AgentHandler } from './agent-context'
 import { importCase } from './import-case'
 import { indexEvidence, conclusionFor, validateDraft, publishConclusion } from './report'
@@ -671,6 +672,10 @@ $('agent-panel').innerHTML = `<div class="stack"><h3>Agent</h3><p id="agent-cont
   </form>
   <details id="collect-controls"><summary>Collect from Ethereum</summary>
   <form id="agent-form" class="stack"><label>Investigation seed<input id="agent-seed" placeholder="Ethereum address or transaction hash"></label>
+    <div class="actions trace-controls">
+      <label>Direction<select id="trace-direction"><option value="">Seed only</option><option value="upstream">Upstream</option><option value="downstream">Downstream</option></select></label>
+      <label>Hops<select id="trace-hops" disabled><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></label>
+    </div>
     <div class="actions"><button id="agent-start">Collect and plot</button><button id="agent-stop" type="button" hidden>Stop</button></div>
   </form></details><div class="actions"><button id="agent-analyze" type="button">Analyze selection</button><button id="agent-draft" type="button">Draft</button></div><div id="entity-preview"></div><output id="agent-progress" aria-live="polite"></output><div id="agent-messages" class="stack"></div></div>`
 $('agent-toggle').onclick = () => {
@@ -769,14 +774,20 @@ function selectedTransfers() {
   return view.edges.filter(item => item.source === selection?.id || item.target === selection?.id).flatMap(item => item.events)
 }
 
-$('agent-form').addEventListener('submit', async event => {
+$('trace-direction').addEventListener('change', () => {
+  $<HTMLSelectElement>('trace-hops').disabled = !value('trace-direction')
+})
+
+$('agent-form').addEventListener('submit', event => {
   event.preventDefault()
   if (investigation) return
   const seed = value('agent-seed').trim()
-  void collectInvestigation(seed).catch(() => {})
+  const direction = value('trace-direction')
+  const trace: TraceOptions | undefined = direction === 'upstream' || direction === 'downstream' ? { direction, hops: Number(value('trace-hops')) } : undefined
+  void collectInvestigation(seed, trace).catch(() => {})
 })
 
-async function collectInvestigation(seed: string) {
+async function collectInvestigation(seed: string, trace?: TraceOptions) {
   if (investigation) throw new Error('An investigation is already running')
   if (!seed.trim()) {
     updateAgentControls('Enter an address or transaction hash')
@@ -787,7 +798,7 @@ async function collectInvestigation(seed: string) {
   investigation = controller
   const found = new Map<string, CaseData['transfers'][number]>()
   try {
-    const coverage = await provider.investigate(seed, async batch => {
+    const publish = async (batch: Collected) => {
       controller.signal.throwIfAborted()
       if (caseId !== data.id) throw new Error('The active case changed')
       if (!batch.transfers.length && !batch.addresses.length && !batch.balances?.length) return
@@ -795,9 +806,12 @@ async function collectInvestigation(seed: string) {
         requestId: crypto.randomUUID(), ...batch })
       for (const transfer of batch.transfers) found.set(transfer.id, transfer)
       updateAgentControls(`Synced revision ${receipt.revision} · ${receipt.added} new transfers`)
-    }, updateAgentControls, controller.signal)
+    }
+    const result = trace ? await traceTransfers(provider.investigate, seed, trace, publish, updateAgentControls, controller.signal)
+      : { coverage: await provider.investigate(seed, publish, updateAgentControls, controller.signal) }
+    const { coverage } = result
     if (data.id === caseId) message(investigationSummary([...found.values()]) + ' ' + coverage, [...found.keys()])
-    return { refs: [...found.keys()], coverage }
+    return { refs: [...found.keys()], ...result }
   } catch (error) {
     if (data.id === caseId) message(controller.signal.aborted ? 'Investigation stopped. Synced records were saved.'
       : error instanceof Error ? error.message : String(error), [...found.keys()])
