@@ -10,6 +10,7 @@ function openDatabase(): Promise<IDBDatabase> {
 }
 
 export async function loadCase(): Promise<CaseData | undefined> {
+  await pendingWrite
   const database = await openDatabase()
   try {
     return await new Promise((resolve, reject) => {
@@ -22,7 +23,15 @@ export async function loadCase(): Promise<CaseData | undefined> {
   }
 }
 
-export async function saveCase(data?: CaseData): Promise<void> {
+let pendingWrite: Promise<void> = Promise.resolve()
+
+export function saveCase(data?: CaseData): Promise<void> {
+  const write = pendingWrite.then(() => writeCase(data))
+  pendingWrite = write.catch(() => {})
+  return write
+}
+
+async function writeCase(data?: CaseData): Promise<void> {
   const database = await openDatabase()
   try {
     await new Promise<void>((resolve, reject) => {

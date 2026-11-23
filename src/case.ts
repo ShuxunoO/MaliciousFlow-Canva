@@ -215,11 +215,25 @@ export function latestBalances(data: CaseData, members: string[], until?: string
   return [...balances.values()]
 }
 
+export interface HistorySnapshot { value: Edits; past: Edits[]; future: Edits[] }
+
 export class History {
   private past: Edits[] = []
   private future: Edits[] = []
 
   constructor(public value = emptyEdits()) {}
+
+  static restore(saved?: Edits | HistorySnapshot): History {
+    if (!saved || !('value' in saved)) return new History(saved)
+    const history = new History(saved.value)
+    history.past = saved.past
+    history.future = saved.future
+    return history
+  }
+
+  snapshot(): HistorySnapshot {
+    return { value: this.value, past: this.past, future: this.future }
+  }
 
   change(apply: (draft: Edits) => void) {
     const next = structuredClone(this.value)

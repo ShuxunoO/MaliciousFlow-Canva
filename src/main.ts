@@ -1,5 +1,5 @@
 import { History, latestBalances, project, sumDecimal } from './case'
-import type { CaseData, Draft, Edits, Filters, FlowEdge, Point } from './case'
+import type { CaseData, Draft, Edits, Filters, FlowEdge, HistorySnapshot, Point } from './case'
 import { applyAnalysis, entityMembers, investigationSummary, type AnalysisBatch, type Receipt } from './investigation'
 import { blockscout, type Collected } from './blockscout'
 import { traceTransfers, type TraceOptions } from './trace'
@@ -61,7 +61,7 @@ let hidden = new Set<string>()
 let grouped = false
 let revealed: string | undefined
 let page = 0
-let history = new History(readEdits(demo.id))
+let history = History.restore(readEdits(demo.id))
 let view = project(data, history.value)
 let drawing = layout(view)
 let assetsByNode = nodeAssets(data, view)
@@ -86,10 +86,14 @@ const provider = blockscout(import.meta.env.VITE_BLOCKSCOUT_URL || undefined)
 const graph = makeGraph($('graph'), setSelection, (id, point) => edit(edits => { edits.positions[id] = point }), () => selection, toggleBranch)
 const status = (text: string) => { $('status').textContent = text }
 
-function readEdits(id: string): Edits | undefined {
+function readEdits(id: string): Edits | HistorySnapshot | undefined {
   try {
     const value = localStorage.getItem('flow-edits:' + id)
-    return value ? JSON.parse(value) as Edits : undefined
+    if (!value) return undefined
+    const raw = JSON.parse(value) as Edits | HistorySnapshot | null
+    if (!raw) return undefined
+    if ('value' in raw) return raw.value && Array.isArray(raw.past) && Array.isArray(raw.future) ? raw : undefined
+    return raw.notes && raw.names && raw.positions ? raw : undefined
   } catch {
     return undefined
   }
@@ -97,7 +101,7 @@ function readEdits(id: string): Edits | undefined {
 
 function persist() {
   try {
-    localStorage.setItem('flow-edits:' + data.id, JSON.stringify(history.value))
+    localStorage.setItem('flow-edits:' + data.id, JSON.stringify(history.snapshot()))
   } catch {
     status('Local storage is full')
   }
@@ -196,7 +200,7 @@ function openCase(next: CaseData) {
   evidence = indexEvidence(next)
   reportMode = 'chapters'
   timelinePage = 0
-  history = new History(readEdits(next.id))
+  history = History.restore(readEdits(next.id))
   $<HTMLInputElement>('case-title').value = history.value.title ?? next.title
   $('scope').hidden = !next.core
   const scopes = Object.keys(next.views ?? {}).filter(id => id !== 'core')

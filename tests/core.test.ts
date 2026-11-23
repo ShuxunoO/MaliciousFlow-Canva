@@ -68,3 +68,18 @@ describe('layout', () => {
     expect(drawing.routes[edge.id].points).not.toEqual(drawing.routes.parallel.points)
   })
 })
+
+it('restores both undo and redo history from a serialized case edit snapshot', () => {
+  const history = new History()
+  history.change(value => { value.title = 'First name' })
+  history.change(value => { value.title = 'Second name' })
+  history.undo()
+  const restored = History.restore(JSON.parse(JSON.stringify(history.snapshot())))
+  expect(restored.value.title).toBe('First name')
+  restored.redo()
+  expect(restored.value.title).toBe('Second name')
+  restored.undo()
+  restored.undo()
+  expect(restored.value.title).toBeUndefined()
+  expect(History.restore(history.value).value.title).toBe('First name')
+})
