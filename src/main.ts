@@ -217,7 +217,7 @@ function openCase(next: CaseData) {
   updateAssets()
   updateAddresses()
   $<HTMLButtonElement>('agent-send').disabled = false
-  $<HTMLTextAreaElement>('agent-question').value = ''
+  $<HTMLTextAreaElement>('agent-question').value = loadAgentDraft()
   renderConversation()
   for (const id of ['from', 'to', 'search']) $<HTMLInputElement>(id).value = ''
   $('results').hidden = true
@@ -703,6 +703,25 @@ function loadConversation() {
   }
 }
 
+function loadAgentDraft(): string {
+  try {
+    return localStorage.getItem('flow-agent-draft:' + data.id) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function saveAgentDraft(text: string) {
+  try {
+    if (text) localStorage.setItem('flow-agent-draft:' + data.id, text)
+    else localStorage.removeItem('flow-agent-draft:' + data.id)
+  } catch {
+    status('Could not save the question draft')
+  }
+}
+
+$('agent-question').addEventListener('input', () => saveAgentDraft(value('agent-question')))
+
 function renderConversation() {
   const messages = $('agent-messages')
   if (!messages) return
@@ -760,6 +779,7 @@ $('agent-chat-form').addEventListener('submit', async event => {
   const context = getAgentContext()
   button.disabled = true
   $<HTMLTextAreaElement>('agent-question').value = ''
+  saveAgentDraft('')
   message(text, [], 'user')
   try {
     const reply = agentHandler ? await agentHandler({ question: text, context, history: structuredClone(conversation) })
