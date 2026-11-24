@@ -1,5 +1,7 @@
 import { transact, type CaseData, type Chapter } from './case'
 
+export const KUCOIN_CASE_ID = 'kucoin-2020'
+
 interface SourceView {
   nodes?: { id: string; data?: { layoutColumn?: number } }[]
   edges: { data: { events: number[] } }[]
@@ -63,7 +65,7 @@ export function importCase(raw: unknown, chapters?: Chapter[]): CaseData {
       sections.get(section)!.push(event.evidence)
     }
     data = {
-      id: 'kucoin-2020',
+      id: KUCOIN_CASE_ID,
       title: 'KuCoin 2020 · Fund Flow Investigation',
       addresses: raw.nodes.map(node => ({
         id: node.id, address: node.address, name: node.label || node.code || node.address,

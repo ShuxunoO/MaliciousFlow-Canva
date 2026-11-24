@@ -11,9 +11,21 @@ npm ci
 npm run dev
 ```
 
+## 案件工作台
+
+「Saved Charts」每个案件显示一行，支持按标题、地址和交易哈希搜索。通过「New Chart」创建空白案件，或从列表打开、重命名和删除已有案件。旧版保存在当前浏览器的案件会迁移到列表。
+
+在画布中点击「Save」提交当前案件的人工修改。浏览器保留待保存的编辑草稿，出现保存失败提示后可重新点击「Save」。选中节点或边可在详情中调整颜色或恢复默认值，配色随画布一起保存。拖动 Agent 标题栏的点阵手柄或星形按钮可移动整个浮窗。收起后仍可拖动星形按钮，点击星形按钮可展开或收起。两个手柄聚焦后都支持方向键移动。文件与图像、会话新建和历史搜索已预留界面入口与接口。
+
 ## 导入 KuCoin
 
-直接用浏览器打开工作区的 [KuCoin v4 离线画布](../exports/kucoin-v4-fund-flow.html)。在线工作台也支持通过「Import case」同时导入 AML-Canva 生成的 `fund-flow-data.json` 和 KOL-001 v4 的 `build/report.json`。界面使用英文，案件原文随报告导入。工作台将导入的案件保存在 IndexedDB，布局和备注存于浏览器。
+直接用浏览器打开工作区的 [KuCoin v4 离线画布](../exports/kucoin-v4-fund-flow.html)。在线工作台也支持通过「Import case」同时导入 AML-Canva 生成的 `fund-flow-data.json` 和 KOL-001 v4 的 `build/report.json`。界面使用英文，案件原文随报告导入。案件与显式保存的编辑存入 IndexedDB，待保存草稿由浏览器本地存储恢复。
+
+可从离线归档安装 KuCoin 的交易和报告数据。工作台会在首页恢复缺失的 KuCoin 条目，已有案件及其编辑优先保留。浏览器按访问的协议、主机名和端口保存人工编辑。
+
+```sh
+python3 scripts/install-kucoin.py ../exports/kucoin-v4-fund-flow.html
+```
 
 默认打开「Core paths」。在「Network scope」切换全量、原图数据、公开回流及 D1–D8，按需开启历史与对照活动。每条交易边均显示摘要，线旁空间不足时用细引线连接到附近空位。点地址或交易边可在画布右侧查看明细，点「Report」可以向右折叠或展开报告。明细中的证据链接会打开报告并定位对应证据。
 

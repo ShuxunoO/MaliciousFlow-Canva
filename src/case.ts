@@ -75,6 +75,8 @@ export interface Edits {
   notes: Record<string, string>
   positions: Record<string, Point>
   bends: Record<string, number>
+  nodeColors?: Record<string, string>
+  edgeColors?: Record<string, string>
   entities: Entity[]
   relations: Relation[]
   drafts: Draft[]

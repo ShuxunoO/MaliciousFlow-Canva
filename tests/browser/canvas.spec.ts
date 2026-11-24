@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { NODE_WIDTH } from '../../src/layout'
 
 test('edits a node from its card and highlights only its direct neighborhood', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   const graph = page.locator('#graph')
   await expect(graph).toHaveAttribute('data-nodes', '5')
   const point = await page.evaluate(() => (window as any).flowCanvas.nodeActionPoint('alpha', [125, -40]))
@@ -30,7 +30,7 @@ test('edits a node from its card and highlights only its direct neighborhood', a
 })
 
 test('boxes nodes, creates a layer with their transfers, and saves spacing per case', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   const graph = page.locator('#graph')
   await expect(graph).toHaveAttribute('data-nodes', '5')
   await page.getByRole('button', { name: 'Box select' }).click()
@@ -71,7 +71,7 @@ test('boxes nodes, creates a layer with their transfers, and saves spacing per c
 test('selects and drags a node, edits its note, and restores the edit', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
   const coordinates = () => page.evaluate(() => (window as any).flowCanvas.canvasCoordinates('relay') as [number, number])
   let [x, y] = await coordinates()
@@ -97,7 +97,7 @@ test('selects and drags a node, edits its note, and restores the edit', async ({
 })
 
 test('navigates between evidence and graph, changes the line bend, and filters by time', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('#graph')).toHaveAttribute('data-edges', '5')
   await page.screenshot({ path: test.info().outputPath('canvas.png') })
   await page.getByRole('button', { name: 'D-3', exact: true }).click()
@@ -120,7 +120,7 @@ test('navigates between evidence and graph, changes the line bend, and filters b
 })
 
 test('filters by address, explores node balances and connects two nodes', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
   await expect(page.locator('body')).not.toContainText(/\p{Script=Han}/u)
@@ -149,7 +149,7 @@ test('filters by address, explores node balances and connects two nodes', async 
 })
 
 test('toggles the branch from the node card and preserves its position', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
   const port = await page.evaluate(width =>
     (window as any).flowCanvas.nodeActionPoint('relay', [width / 2, 0]) as [number, number], NODE_WIDTH)
@@ -159,7 +159,7 @@ test('toggles the branch from the node card and preserves its position', async (
 })
 
 test('restores undo and redo after a browser reload', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
   const title = page.getByLabel('Canvas name')
   await title.fill('Saved investigation')
@@ -175,7 +175,7 @@ test('restores undo and redo after a browser reload', async ({ page }) => {
 
 test('adds a collected transaction from outside the current case view without querying a provider', async ({ page }) => {
   const demo = (await import('../../src/demo')).demo
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
   await page.locator('#case-file').setInputFiles({ name: 'case.json', mimeType: 'application/json',
     buffer: Buffer.from(JSON.stringify({ ...demo, core: ['demo-0'] })) })
@@ -189,7 +189,7 @@ test('adds a collected transaction from outside the current case view without qu
 })
 
 test('discards a cancelled edge drag and accepts the next drag', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
   await page.evaluate(() => (window as any).maliciousFlow.set_view('D-3'))
   const handle = page.getByRole('button', { name: 'Drag transaction edge' })

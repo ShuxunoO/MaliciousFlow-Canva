@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 test('browses the timeline, temporarily reveals evidence, edits a draft and publishes a conclusion', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
   await page.getByLabel('End date UTC').fill('2020-09-26')
   await expect(page.locator('#status')).toContainText('3 transfers')

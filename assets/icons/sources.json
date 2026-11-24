@@ -1,0 +1,195 @@
+{
+  "schema_version": "1.0",
+  "retrieved_at_utc": "2026-11-04T08:55:40+00:00",
+  "purpose": "Offline, verifiable brand identification in investigative diagrams. Asset provenance is independent from address attribution.",
+  "brands": {
+    "ethereum": {
+      "label": "Ethereum",
+      "status": "official-source-obtained",
+      "file": "icons/brands/ethereum.svg",
+      "format": "image/svg+xml",
+      "origin_url": "https://ethereum.org/images/assets/svgs/eth-diamond-glyph.svg",
+      "source_page": "https://ethereum.org/assets/",
+      "resolved_url": "https://ethereum.org/images/assets/svgs/eth-diamond-glyph.svg",
+      "retrieved_at_utc": "2026-11-04T08:55:40+00:00",
+      "sha256": "335f39552e96193121de4c8d55d8170ea0fc061dfa7540a78a21699a762d0088",
+      "provenance": "Ethereum official ethereum.org brand assets page links this glyph SVG.",
+      "use_restrictions": "Official brand asset. Trademark rights are separate from site/source-code licenses; preserve design and avoid implying endorsement.",
+      "transformations": [],
+      "recommended_background": "#FFFFFF"
+    },
+    "tornado-cash": {
+      "label": "Tornado Cash",
+      "status": "official-source-obtained",
+      "file": "icons/brands/tornado-cash.svg",
+      "format": "image/svg+xml",
+      "origin_url": "https://raw.githubusercontent.com/tornadocash/tornado-classic-ui/a83fae0772c8da084c0e76b3a756b456f5b9f5bb/assets/img/logo.svg",
+      "source_page": "https://github.com/tornadocash/tornado-classic-ui/blob/a83fae0772c8da084c0e76b3a756b456f5b9f5bb/assets/img/logo.svg",
+      "resolved_url": "https://raw.githubusercontent.com/tornadocash/tornado-classic-ui/a83fae0772c8da084c0e76b3a756b456f5b9f5bb/assets/img/logo.svg",
+      "retrieved_at_utc": "2026-11-04T08:55:40+00:00",
+      "sha256": "36b63def2dce7919c0241706233125654214d5093af8867b336cb68d428cfdbd",
+      "provenance": "Logo in the archived Tornado Cash project organization classic UI repository; fixed commit a83fae0772c8da084c0e76b3a756b456f5b9f5bb.",
+      "use_restrictions": "Repository is MIT licensed (see pinned LICENSE); retain attribution when redistributing source. Logo/trademark rights remain distinct. Original mint fill is preserved.",
+      "transformations": [],
+      "recommended_background": "#173D2F",
+      "source_license": {
+        "file": "icons/brands/tornado-cash.LICENSE.txt",
+        "origin_url": "https://raw.githubusercontent.com/tornadocash/tornado-classic-ui/a83fae0772c8da084c0e76b3a756b456f5b9f5bb/LICENSE",
+        "sha256": "04b56f55097e704315278a93e016e56590d845f55e6d4d5d8d9ea8145b665e9e"
+      }
+    },
+    "uniswap": {
+      "label": "Uniswap",
+      "status": "official-source-obtained",
+      "file": "icons/brands/uniswap.svg",
+      "format": "image/svg+xml",
+      "origin_url": "https://raw.githubusercontent.com/Uniswap/brand-assets/1d829912a8b1c154b700984f88baa83142ee1a1b/Uniswap%20Brand%20Assets/Uniswap_icon_pink.svg",
+      "source_page": "https://github.com/Uniswap/brand-assets/tree/1d829912a8b1c154b700984f88baa83142ee1a1b",
+      "resolved_url": "https://raw.githubusercontent.com/Uniswap/brand-assets/1d829912a8b1c154b700984f88baa83142ee1a1b/Uniswap%20Brand%20Assets/Uniswap_icon_pink.svg",
+      "retrieved_at_utc": "2026-11-04T08:55:40+00:00",
+      "sha256": "47b703cb5ea86969c1b14b75c094f18cffbfa57a1b6e219a8db571aab087022c",
+      "provenance": "Uniswap official organization brand-assets repository; protocol unicorn icon, not Uniswap Labs wordmark; pinned commit 1d829912a8b1c154b700984f88baa83142ee1a1b.",
+      "use_restrictions": "Official brand asset. No blanket trademark/relicensing permission is asserted; preserve logo and follow the brand owner’s applicable guidelines.",
+      "transformations": [],
+      "recommended_background": "#FFFFFF"
+    },
+    "kucoin": {
+      "label": "KuCoin",
+      "status": "official-source-obtained",
+      "file": "icons/brands/kucoin.svg",
+      "format": "image/svg+xml",
+      "origin_url": "https://assets.staticimg.com/kc-v2-config/site-config/695545321abf9c0001915126_mini_logo.svg",
+      "source_page": "https://www.kucoin.com/announcement/en-media-kit?ignoreTemplate=true",
+      "resolved_url": "https://assets.staticimg.com/kc-v2-config/site-config/695545321abf9c0001915126_mini_logo.svg",
+      "retrieved_at_utc": "2026-11-04T08:55:40+00:00",
+      "sha256": "613b122fcd4679b2925d03b49eea999596ad6608d63f28c6b7aaf76a5609cb7e",
+      "provenance": "KuCoin official Media Kit page embeds this current mini-logo CDN URL in site configuration. Official-domain page establishes CDN provenance.",
+      "use_restrictions": "KuCoin trademark. Download does not confer endorsement or blanket reuse rights. This is the brand available on retrieval date, not evidence that the 2020 artwork was identical.",
+      "transformations": [],
+      "recommended_background": "#FFFFFF"
+    },
+    "tether": {
+      "label": "Tether USD₮",
+      "status": "official-source-obtained",
+      "file": "icons/brands/tether.svg",
+      "format": "image/svg+xml",
+      "origin_url": "https://tether.to/images/logoMarkGreen.svg",
+      "source_page": "https://tether.to/en/media/",
+      "resolved_url": "https://tether.to/images/logoMarkGreen.svg",
+      "retrieved_at_utc": "2026-11-04T08:55:40+00:00",
+      "sha256": "155d19d88ac9043f7233662c20396e41b0a71a68f3811889de07baff82afc2f6",
+      "provenance": "Tether official Media Assets page explicitly provides the green Tether Logo Mark SVG.",
+      "use_restrictions": "Subject to Tether Media Assets brand/copy guidelines and any required permission; keep colors/proportions and do not imply endorsement.",
+      "transformations": [],
+      "recommended_background": "#FFFFFF"
+    }
+  },
+  "generic_roles": {
+    "source": {
+      "file": "icons/roles/source.svg",
+      "sha256": "0ebb080cb5dbf97abfc1eedb34c89077fc19ce70c37632139482d3600b22b9de",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "intermediary": {
+      "file": "icons/roles/intermediary.svg",
+      "sha256": "a173e56ed6b77c24aa3ed7b019d34bb068b7b1ac4c92c0a7e8e7c8c60c9f92a4",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "depositor": {
+      "file": "icons/roles/depositor.svg",
+      "sha256": "9d195992e75b790be3d42f8afdeb197f4cb7c7e6d68565b702ac619ed08b32f2",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "pool": {
+      "file": "icons/roles/pool.svg",
+      "sha256": "fb55411b6e11608dfa84168897197d0723bafbd146edf83a821ef4bbae642f7d",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "caller": {
+      "file": "icons/roles/caller.svg",
+      "sha256": "08accb712b32e078b32a9405babd41117feae9470a9d557f18012129b507e24c",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "recipient": {
+      "file": "icons/roles/recipient.svg",
+      "sha256": "dbbb90e1724fa4ea7f515824014dfdfff27bea37d1958fb7ed85e6c8d11d38dd",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "funder": {
+      "file": "icons/roles/funder.svg",
+      "sha256": "6ad20111c630a200d0a092fdc004d53567d39bd9d98f557ddf06abe47a34af47",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "distributor": {
+      "file": "icons/roles/distributor.svg",
+      "sha256": "ddd72c51e25869dff36af6781e57b6d687b7b2b7ccaa6452643daf5507a06ea3",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "endpoint": {
+      "file": "icons/roles/endpoint.svg",
+      "sha256": "85ee5cc13588e459850a168621171d54de7542c40b7d765685bb7342a64d4cec",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "hot_wallet": {
+      "file": "icons/roles/hot_wallet.svg",
+      "sha256": "c6c75f912c10200feec73d95266c14ed004661447cf3a142ced800ff55e437a5",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "contract": {
+      "file": "icons/roles/contract.svg",
+      "sha256": "b776e238a1d8d6c8800f1d3d148b64ba741cbb74fa7ff7b11a2fbcb664ac5d8b",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "service": {
+      "file": "icons/roles/service.svg",
+      "sha256": "0e904ff0a9e2e095b61829551b7dde68e838d406070dd5889ae6cc76ad5a3bbd",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    },
+    "gap": {
+      "file": "icons/roles/gap.svg",
+      "sha256": "ead9d89a307dfa8fe317420f0162681f966b674283394a177a89648053237cdb",
+      "origin": "Project-authored generic functional icon. Not an official brand logo.",
+      "license": "CC0-1.0",
+      "created_at_utc": "2026-11-04T08:55:40+00:00",
+      "design": "Near-white #FFFDFD rounded line symbol on a transparent square. The renderer supplies the solid circular role badge."
+    }
+  },
+  "asset_path_base": "maliciousflow-report-design/assets/",
+  "generic_role_design": "All 13 generic icons use near-white #FFFDFD rounded strokes on transparent 32×32 SVGs. A solid circular role badge is supplied by the host renderer; 68% image-box scale produces approximately 60% visible symbol diameter. Official brand originals remain unchanged."
+}

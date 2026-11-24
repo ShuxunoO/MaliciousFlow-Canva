@@ -13,7 +13,7 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/')
-  await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
+  await expect(page.getByRole('heading', { name: 'Saved Charts' })).toBeVisible()
   const importStarted = performance.now()
   await page.locator('#case-file').setInputFiles([casePath!, ...(reportPath && existsSync(reportPath) ? [reportPath] : [])])
   await expect(page.getByLabel('Canvas name')).toHaveValue('KuCoin 2020 · Fund Flow Investigation', { timeout: 40_000 })

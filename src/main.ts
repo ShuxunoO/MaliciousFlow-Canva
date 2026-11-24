@@ -4,13 +4,15 @@ import { analysisUpdates, applyAnalysis, applyEntityMembership, entityMembers, i
 import { blockscout, type Collected } from './blockscout'
 import { traceTransfers, type TraceOptions } from './trace'
 import { answerQuestion, type AgentContext, type AgentHandler } from './agent-context'
-import { importCase } from './import-case'
+import { enableAgentWidgetDrag } from './agent-panel'
+import { importCase, KUCOIN_CASE_ID } from './import-case'
 import { indexEvidence, conclusionFor, validateDraft, publishConclusion } from './report'
 import { importLocalReport } from './report-import'
-import { loadCase, saveCase } from './storage'
+import { canRestoreCase, loadChart, readDraft, restoreCase, saveCase, saveChartEdits, updateCase } from './storage'
+import { chartRoute, createChartsHome } from './charts-home'
 import { demo } from './demo'
 import { layout, layoutSettings, LAYOUT_LIMITS, NODE_HEIGHT, NODE_WIDTH } from './layout'
-import { graphData, makeGraph, renderedSnapshot, type Selection } from './renderer'
+import { displayColor, edgeColorStyle, graphData, makeGraph, nodeColorStyle, renderedSnapshot, type Selection } from './renderer'
 import { validateDrawing } from './layout-validation'
 import { addressAccent, addressIcon } from './address-icons'
 import { nodeAssets } from './node-summary'
@@ -18,14 +20,17 @@ import './style.css'
 
 const app = document.querySelector<HTMLElement>('#app')!
 app.innerHTML = `
+  <div id="charts-home" hidden></div>
+  <input type="file" id="case-file" accept="application/json,.json" multiple hidden>
+  <div id="chart-screen" hidden>
   <header class="top">
     <div class="identity"><span class="mark" aria-hidden="true">M</span><div>
       <div class="brand">MALICIOUSFLOW</div><input id="case-title" aria-label="Canvas name">
     </div></div>
     <div class="toolbar">
-      <button id="demo">Demo</button><button id="new-case">New investigation</button><button id="import">Import case</button>
-      <input type="file" id="case-file" accept="application/json,.json" multiple hidden>
+      <button id="back-charts">‹ Saved Charts</button><button id="new-case">New investigation</button><button id="import">Import case</button>
       <button id="undo">Undo</button><button id="redo">Redo</button>
+      <button id="save-chart" class="primary">Save</button><output id="save-status" aria-live="polite"></output>
     </div>
   </header>
   <div class="workspace">
@@ -44,7 +49,7 @@ app.innerHTML = `
         <button id="layers-toggle" aria-expanded="false" aria-controls="layers-panel">Layers</button>
         <button id="exit-pair" hidden>Exit pair view</button>
       </div>
-      <div class="canvas-body">
+      <div id="canvas-body" class="canvas-body">
         <aside id="scope-panel" aria-label="Network scope" hidden>
           <h2>Network scope</h2><div id="scope-options"></div>
           <label class="context-check"><input id="include-context" type="checkbox" checked>Include historical &amp; comparison activity</label>
@@ -68,10 +73,13 @@ app.innerHTML = `
         </section>
         <button id="handle" aria-label="Drag transaction edge" hidden></button>
         <div id="footer"><div class="actions"><button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit">Fit</button></div><output id="status" aria-live="polite"></output></div>
-        <section id="agent-panel" aria-label="Agent chat" hidden></section>
-        <button id="agent-toggle" aria-label="Agent chat" aria-expanded="false">✦</button>
         </div>
         <aside id="selection" aria-label="Selection details" hidden></aside>
+        <div id="agent-widget">
+          <section id="agent-panel" aria-label="Agent chat" hidden></section>
+          <button id="agent-toggle" aria-label="Agent chat" aria-controls="agent-panel"
+            aria-expanded="false" title="Click to open or close. Drag to move.">✦</button>
+        </div>
       </div>
     </section>
     <div class="report-dock">
@@ -87,7 +95,7 @@ app.innerHTML = `
       <label>Note <textarea name="note"></textarea></label>
       <div class="actions"><button class="primary">Save node</button><button type="button" id="node-edit-cancel">Cancel</button></div>
     </form>
-  </dialog>`
+  </dialog></div>`
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id)! as T
 const value = (id: string) => $<HTMLInputElement>(id).value
@@ -95,6 +103,7 @@ const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, characte
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!))
 let data = demo
 let selection: Selection | undefined
+let colorPreview: { item: Selection; color: string } | undefined
 let boxed = new Set<string>()
 let soloLayer: string | undefined
 let layerTransaction: string | undefined
@@ -105,7 +114,12 @@ let hidden = new Set<string>()
 let grouped = false
 let revealed: string | undefined
 let page = 0
-let history = History.restore(readEdits(demo.id))
+let history = new History()
+let savedEdits = JSON.stringify(history.snapshot())
+let saving = false
+let saveError = false
+let routeRequest = 0
+let activeCase = false
 let view = project(data, history.value)
 let drawing = layout(view)
 let layoutValidation = validateDrawing(view, drawing)
@@ -116,7 +130,6 @@ let review: { draft: Draft; revision: number } | undefined
 let evidence = indexEvidence(data)
 let reportMode: 'chapters' | 'timeline' = 'chapters'
 let timelinePage = 0
-let openedByUser = false
 let investigation: AbortController | undefined
 let analysisQueue: Promise<unknown> = Promise.resolve()
 let keepPositions = false
@@ -144,17 +157,12 @@ function resizeGraph() {
 }
 new ResizeObserver(resizeGraph).observe($('graph'))
 
-function readEdits(id: string): Edits | HistorySnapshot | undefined {
-  try {
-    const value = localStorage.getItem('flow-edits:' + id)
-    if (!value) return undefined
-    const raw = JSON.parse(value) as Edits | HistorySnapshot | null
-    if (!raw) return undefined
-    if ('value' in raw) return raw.value && Array.isArray(raw.past) && Array.isArray(raw.future) ? raw : undefined
-    return raw.notes && raw.names && raw.positions ? raw : undefined
-  } catch {
-    return undefined
-  }
+function updateSaveStatus() {
+  const output = $('save-status')
+  output.dataset.state = saving ? 'saving' : saveError ? 'error' :
+    JSON.stringify(history.snapshot()) === savedEdits ? 'saved' : 'pending'
+  output.textContent = { saving: 'Saving…', error: 'Save failed. Retry.', saved: 'Saved', pending: 'Unsaved changes' }[output.dataset.state]!
+  $<HTMLButtonElement>('save-chart').disabled = saving
 }
 
 function persist() {
@@ -162,6 +170,34 @@ function persist() {
     localStorage.setItem('flow-edits:' + data.id, JSON.stringify(history.snapshot()))
   } catch {
     status('Local storage is full')
+  }
+  updateSaveStatus()
+}
+
+$('save-chart').onclick = async () => {
+  if (!activeCase || saving) return
+  const id = data.id
+  const currentRoute = routeRequest
+  const snapshot = structuredClone(history.snapshot())
+  const serialized = JSON.stringify(snapshot)
+  saving = true
+  updateSaveStatus()
+  try {
+    await saveChartEdits(id, snapshot.value.title ?? data.title, snapshot)
+    try {
+      const draft = readDraft(id)
+      if (draft && JSON.stringify(History.restore(draft).snapshot()) === serialized) localStorage.removeItem('flow-edits:' + id)
+    } catch {}
+    if (routeRequest !== currentRoute) return
+    savedEdits = serialized
+    saveError = false
+  } catch {
+    if (routeRequest === currentRoute) saveError = true
+  } finally {
+    if (routeRequest === currentRoute) {
+      saving = false
+      updateSaveStatus()
+    }
   }
 }
 
@@ -181,6 +217,7 @@ function toggleBranch(id: string, direction: 'in' | 'out') {
 }
 
 function setSelection(item?: Selection) {
+  colorPreview = undefined
   boxed.clear()
   layerTransaction = undefined
   if (linking && item?.type === 'node') {
@@ -236,7 +273,9 @@ function render(fit = false, focus?: string, refreshInspector = true): Promise<v
       (detours.length ? ` · ${detours.length} extended routes` : '')
     keepPositions = false
     assetsByNode = nodeAssets(data, view, filters.to)
-    graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection, boxed, !!filters.pair))
+    const styles = colorPreview && colorPreview.item === selection
+      ? withColor(history.value, colorPreview.item, colorPreview.color) : history.value
+    graph.setData(graphData(view, drawing, styles, assetsByNode, hidden, selection, boxed, !!filters.pair))
     await graph.render()
     if (beforeResize && anchor) {
       const [x, y] = graph.getClientByCanvas(anchor)
@@ -265,7 +304,8 @@ function render(fit = false, focus?: string, refreshInspector = true): Promise<v
   return queue
 }
 
-function openCase(next: CaseData) {
+function openCase(next: CaseData, checkpoint?: HistorySnapshot) {
+  activeCase = true
   investigation?.abort()
   investigation = undefined
   cancelDrag()
@@ -275,6 +315,7 @@ function openCase(next: CaseData) {
   entityPreview = undefined
   loadConversation()
   selection = undefined
+  colorPreview = undefined
   boxed.clear()
   soloLayer = undefined
   setBoxMode(false)
@@ -288,7 +329,11 @@ function openCase(next: CaseData) {
   evidence = indexEvidence(next)
   reportMode = 'chapters'
   timelinePage = 0
-  history = History.restore(readEdits(next.id))
+  savedEdits = JSON.stringify(History.restore(checkpoint).snapshot())
+  history = History.restore(readDraft(next.id) ?? checkpoint)
+  saving = false
+  saveError = false
+  updateSaveStatus()
   syncLayout()
   showPopover('layout', false)
   showPopover('layers', false)
@@ -302,8 +347,10 @@ function openCase(next: CaseData) {
   renderConversation()
   for (const id of ['from', 'to', 'search']) $<HTMLInputElement>(id).value = ''
   $('results').hidden = true
+  setAgentOpen(false)
+  $<HTMLDetailsElement>('collect-controls').open = false
   renderReport()
-  void render(true)
+  return render(true)
 }
 
 const scopeNames: Record<string, [string, string]> = {
@@ -369,6 +416,7 @@ function updateAddresses() {
 function setAgentOpen(open: boolean) {
   $('agent-panel').hidden = !open
   $('agent-toggle').setAttribute('aria-expanded', String(open))
+  if (!open) $<HTMLDetailsElement>('agent-attachments').open = false
   renderAgentContext()
 }
 
@@ -404,6 +452,21 @@ function eventRows(events: FlowEdge['events']): string {
     </div>`).join('')
   return entries + (events.length > 8
     ? `<div class="actions"><button data-page="-1" ${page === 0 ? 'disabled' : ''}>Previous</button><small>${page + 1} / ${Math.ceil(events.length / 8)}</small><button data-page="1" ${(page + 1) * 8 >= events.length ? 'disabled' : ''}>Next</button></div>` : '')
+}
+
+const colorKey = (item: Selection) => item.type === 'node' ? 'nodeColors' : 'edgeColors'
+
+function withColor(edits: Edits, item: Selection, color: string) {
+  const key = colorKey(item)
+  return { ...edits, [key]: { ...edits[key], [item.id]: color } }
+}
+
+function colorControls(item: Selection, color: string) {
+  const custom = history.value[colorKey(item)]?.[item.id]
+  return `<div class="inspector-color actions">
+    <label>${item.type === 'node' ? 'Node color' : 'Edge color'} <input type="color" value="${esc(color)}" data-element-color></label>
+    <button data-reset-color ${custom ? '' : 'disabled'}>Reset color</button>
+  </div>`
 }
 
 function renderSelection() {
@@ -447,6 +510,7 @@ function renderSelection() {
       ${balanceRows.some(item => item.prices.length && item.prices.length < item.snapshots) ? '<p class="subtle">* Partial USD coverage</p>' : ''}
       <label>Name<input data-name="${esc(node.id)}" value="${esc(node.name)}"></label>
       <label>Node note<textarea data-note="${esc(node.id)}">${esc(history.value.notes[node.id])}</textarea></label>
+      ${colorControls({ type: 'node', id: node.id }, displayColor(history.value, 'node', node))}
       <div class="actions"><button data-direction="in">${hidden.has(node.id + ':in') ? 'Expand' : 'Collapse'} inflow</button><button data-direction="out">${hidden.has(node.id + ':out') ? 'Expand' : 'Collapse'} outflow</button></div>
       <div class="actions"><button data-neighbors>Filter to selection</button>${node.members ? '<button data-members>Edit members</button><button data-ungroup>Ungroup</button>'
         : '<button data-group>Assign to entity</button><button data-link>Add relationship</button>'}</div>
@@ -463,6 +527,7 @@ function renderSelection() {
       <div>${esc(view.nodes.find(node => node.id === edge.source)?.name)} → ${esc(view.nodes.find(node => node.id === edge.target)?.name)}</div>
       ${edge.asset ? `<div class="subtle">${esc(edge.amount)} ${esc(edge.asset)} · ${edge.events.length} transfers<br>USD ${esc(usd)}</div>` : ''}
       <label>Edge note<textarea data-note="${esc(edge.id)}">${esc(history.value.notes[edge.id] ?? edge.note)}</textarea></label>
+      ${colorControls({ type: 'edge', id: edge.id }, displayColor(history.value, 'edge', edge))}
       ${!filters.pair && edge.source !== edge.target ? '<button data-focus-pair>Focus address pair</button>' : ''}
       <button data-open-layers>Add to layer</button>
       ${eventRows(edge.events)}</div>`
@@ -835,22 +900,19 @@ $('exit-pair').onclick = () => {
   revealed = undefined
   void render(true)
 }
-$('demo').onclick = () => {
-  openedByUser = true
-  openCase(demo)
-  void saveCase().catch(() => status('Could not clear the saved case'))
-}
-$('new-case').onclick = () => {
-  openedByUser = true
+async function newChart() {
   const blank: CaseData = { id: crypto.randomUUID(), title: 'Ethereum investigation', addresses: [], transfers: [],
     chapters: [{ id: 'findings', title: 'Findings', text: '', refs: [] }] }
-  openCase(blank)
-  void saveCase(blank).catch(() => status('Could not save the new case'))
-  $('agent-panel').hidden = false
-  $('agent-toggle').setAttribute('aria-expanded', 'true')
-  $<HTMLDetailsElement>('collect-controls').open = true
-  $('agent-seed').focus()
+  try {
+    await saveCase(blank)
+    await navigate(chartRoute(blank.id))
+    if (activeCase && data.id === blank.id) $('add-seed').click()
+  } catch (error) {
+    showWorkspaceError(error)
+  }
 }
+$('new-case').onclick = newChart
+$('back-charts').onclick = () => { void navigate('#charts') }
 $('add-seed').onclick = () => {
   setAgentOpen(true)
   $<HTMLDetailsElement>('collect-controls').open = true
@@ -880,7 +942,6 @@ $('case-file').addEventListener('change', async event => {
   try {
     const files = [...(input.files ?? [])]
     if (!files.length) return
-    openedByUser = true
     const payloads = await Promise.all(files.map(async file => JSON.parse(await file.text())))
     const raw = payloads.find(item => item && (Array.isArray(item.addresses) && Array.isArray(item.transfers)
       || Array.isArray(item.nodes) && Array.isArray(item.events)))
@@ -888,10 +949,10 @@ $('case-file').addEventListener('change', async event => {
     const importedReport = report && importLocalReport(report)
     const next = importCase(raw, importedReport?.chapters)
     if (importedReport) next.reportSources = importedReport.sources
-    openCase(next)
     await saveCase(next)
+    await navigate(chartRoute(next.id))
   } catch (error) {
-    status(error instanceof Error ? error.message : String(error))
+    showWorkspaceError(error)
   } finally {
     input.value = ''
   }
@@ -939,6 +1000,17 @@ $('search').addEventListener('input', () => {
 })
 $('selection').addEventListener('change', event => {
   const input = event.target as HTMLInputElement
+  if (input.hasAttribute('data-element-color') && selection) {
+    const item = selection
+    const key = colorKey(item)
+    colorPreview = undefined
+    if (history.value[key]?.[item.id] !== input.value) {
+      history.change(edits => { edits[key] = { ...edits[key], [item.id]: input.value } })
+      persist()
+    }
+    $('selection').querySelector<HTMLButtonElement>('[data-reset-color]')!.disabled = false
+    void render(false, undefined, false)
+  }
   if (input.dataset.name) {
     edit(edits => { edits.names[input.dataset.name!] = input.value.trim()
       || data.addresses.find(item => item.id === input.dataset.name)?.name
@@ -952,10 +1024,28 @@ $('selection').addEventListener('change', event => {
     void render(false, undefined, false)
   }
 })
+$('selection').addEventListener('input', event => {
+  const input = event.target as HTMLInputElement
+  if (!selection || !input.hasAttribute('data-element-color')) return
+  const preview = { item: selection, color: input.value }
+  colorPreview = preview
+  queue = queue.then(async () => {
+    if (!activeCase || colorPreview !== preview || selection !== preview.item) return
+    const { id, type } = preview.item
+    if (type === 'node') graph.updateNodeData([{ id, style: nodeColorStyle(preview.color) }])
+    else graph.updateEdgeData([{ id, style: edgeColorStyle(preview.color) }])
+    await graph.draw()
+  }).catch(error => status(error instanceof Error ? error.message : String(error)))
+})
 
 document.addEventListener('click', event => {
   const button = (event.target as HTMLElement).closest('button')
   if (!button) return
+  if (button.hasAttribute('data-reset-color') && selection) {
+    const item = selection
+    colorPreview = undefined
+    edit(edits => { delete edits[colorKey(item)]?.[item.id] })
+  }
   if (button.dataset.focus) {
     $('results').hidden = true
     void locate(button.dataset.focus)
@@ -1093,10 +1183,30 @@ $('report').addEventListener('submit', event => {
   }
 })
 
-$('agent-panel').innerHTML = `<div class="stack"><h3>Agent</h3><p id="agent-context" class="subtle"></p>
-  <form id="agent-chat-form" class="stack"><label>Ask about this selection
-    <textarea id="agent-question" placeholder="Ask about flows, balances or evidence" required></textarea></label>
-    <button id="agent-send">Send</button>
+$('agent-panel').innerHTML = `
+  <header id="agent-titlebar" class="agent-titlebar">
+    <div id="agent-grip" tabindex="0" role="group" aria-label="Move Agent panel with the arrow keys" title="Drag to move">
+      <span class="agent-grip-dots" aria-hidden="true"></span><h3>Agent</h3>
+    </div>
+    <div class="actions">
+      <button aria-label="New session (Coming soon)" title="New session · Coming soon" disabled>＋</button>
+      <button aria-label="Search chart sessions (Coming soon)" title="Search chart sessions · Coming soon" disabled>⌕</button>
+      <button id="agent-collapse" aria-label="Collapse panel" title="Collapse">−</button>
+    </div>
+  </header>
+  <div class="agent-body stack">
+  <div id="agent-messages" class="stack" role="log" aria-label="Agent messages"></div>
+  <div id="entity-preview"></div><output id="agent-progress" aria-live="polite"></output>
+  <p id="agent-context" class="subtle"></p>
+  <form id="agent-chat-form" class="stack">
+    <textarea id="agent-question" aria-label="Ask about this selection" placeholder="Ask about flows, balances or evidence" required></textarea>
+    <div class="agent-composer-bar">
+      <details id="agent-attachments" class="agent-attachments">
+        <summary aria-label="Attachments">＋</summary>
+        <button type="button" disabled>Add files or images · Coming soon</button>
+      </details>
+      <button id="agent-send" class="primary">Send</button>
+    </div>
   </form>
   <details id="collect-controls"><summary>Collect from Ethereum</summary>
   <form id="agent-form" class="stack"><label>Investigation seed<input id="agent-seed" placeholder="Ethereum address or transaction hash"></label>
@@ -1105,11 +1215,13 @@ $('agent-panel').innerHTML = `<div class="stack"><h3>Agent</h3><p id="agent-cont
       <label>Hops<select id="trace-hops" disabled><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></label>
     </div>
     <div class="actions"><button id="include-case" type="button">Add from case</button><button id="agent-start">Collect and plot</button><button id="agent-stop" type="button" hidden>Stop</button></div>
-  </form></details><div class="actions"><button id="agent-analyze" type="button">Analyze selection</button><button id="agent-draft" type="button">Draft</button></div><div id="entity-preview"></div><output id="agent-progress" aria-live="polite"></output><div id="agent-messages" class="stack"></div></div>`
-$('agent-toggle').onclick = () => {
-  $('agent-panel').hidden = !$('agent-panel').hidden
-  $('agent-toggle').setAttribute('aria-expanded', String(!$('agent-panel').hidden))
-  renderAgentContext()
+  </form><div class="actions agent-tools"><button id="agent-analyze" type="button">Analyze selection</button><button id="agent-draft" type="button">Draft</button></div>
+  </details></div>`
+enableAgentWidgetDrag($('agent-widget'), $('agent-titlebar'), $('agent-grip'), $('agent-toggle'), $('canvas-body'), $('stage'))
+$('agent-toggle').onclick = () => setAgentOpen($('agent-panel').hidden)
+$('agent-collapse').onclick = () => {
+  setAgentOpen(false)
+  $('agent-toggle').focus()
 }
 
 function loadConversation() {
@@ -1146,6 +1258,7 @@ function renderConversation() {
   if (!messages) return
   messages.innerHTML = conversation.slice(-8).map(item => `<div class="agent-message" data-speaker="${item.speaker ?? 'agent'}"><small>${item.speaker === 'user' ? 'You' : 'Agent'}</small><p>${esc(item.text)}</p>
     <div class="actions">${refsMarkup(item.refs.slice(0, 8))}</div></div>`).join('')
+  messages.scrollTop = messages.scrollHeight
   if (!entityPreview) $('entity-preview').replaceChildren()
   updateAgentControls()
 }
@@ -1162,13 +1275,14 @@ function updateAgentControls(progress = '') {
   $('agent-progress').textContent = progress
 }
 
-function applyBatch(batch: AnalysisBatch): Promise<Receipt> {
+function applyBatch(batch: AnalysisBatch, seed?: string): Promise<Receipt> {
   const write = analysisQueue.then(async () => {
+    if (!activeCase) throw new Error('Open a chart to apply analysis')
     const current = data
     const result = applyAnalysis(current, batch)
     if (result.data === current) return result.receipt
-    await saveCase(result.data)
-    if (data !== current) throw new Error('The active case changed')
+    await updateCase(result.data, seed)
+    if (!activeCase || data !== current) return result.receipt
     data = result.data
     evidence = indexEvidence(data)
     updateAssets()
@@ -1259,6 +1373,7 @@ $('agent-form').addEventListener('submit', event => {
 })
 
 async function collectInvestigation(seed: string, trace?: TraceOptions) {
+  if (!activeCase) throw new Error('Open a chart to collect transactions')
   if (investigation) throw new Error('An investigation is already running')
   if (!seed.trim()) {
     updateAgentControls('Enter an address or transaction hash')
@@ -1269,22 +1384,24 @@ async function collectInvestigation(seed: string, trace?: TraceOptions) {
   investigation = controller
   const found = new Map<string, CaseData['transfers'][number]>()
   try {
+    const current = () => activeCase && data.id === caseId && investigation === controller
+    const progress = (text: string) => { if (current()) updateAgentControls(text) }
     const publish = async (batch: Collected) => {
       controller.signal.throwIfAborted()
-      if (caseId !== data.id) throw new Error('The active case changed')
+      if (!current()) throw new Error('The active case changed')
       if (!batch.transfers.length && !batch.addresses.length && !batch.balances?.length) return
       const receipt = await applyBatch({ schemaVersion: 1, caseId, expectedRevision: data.analysis?.revision ?? 0,
-        requestId: crypto.randomUUID(), ...batch })
+        requestId: crypto.randomUUID(), ...batch }, seed.trim())
       for (const transfer of batch.transfers) found.set(transfer.id, transfer)
-      updateAgentControls(`Synced revision ${receipt.revision} · ${receipt.added} new transfers`)
+      progress(`Synced revision ${receipt.revision} · ${receipt.added} new transfers`)
     }
-    const result = trace ? await traceTransfers(provider.investigate, seed, trace, publish, updateAgentControls, controller.signal)
-      : { coverage: await provider.investigate(seed, publish, updateAgentControls, controller.signal) }
+    const result = trace ? await traceTransfers(provider.investigate, seed, trace, publish, progress, controller.signal)
+      : { coverage: await provider.investigate(seed, publish, progress, controller.signal) }
     const { coverage } = result
-    if (data.id === caseId) message(investigationSummary([...found.values()]) + ' ' + coverage, [...found.keys()])
+    if (current()) message(investigationSummary([...found.values()]) + ' ' + coverage, [...found.keys()])
     return { refs: [...found.keys()], ...result }
   } catch (error) {
-    if (data.id === caseId) message(controller.signal.aborted ? 'Investigation stopped. Synced records were saved.'
+    if (activeCase && data.id === caseId && investigation === controller) message(controller.signal.aborted ? 'Investigation stopped. Synced records were saved.'
       : error instanceof Error ? error.message : String(error), [...found.keys()])
     throw error
   } finally {
@@ -1484,26 +1601,105 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape') cancelDrag()
 })
 
+const chartsHome = createChartsHome($('charts-home'), {
+  open: id => { void navigate(chartRoute(id)) },
+  openDemo: () => { void navigate(chartRoute(demo.id)) },
+  create: () => { void newChart() },
+  importCase: () => $('case-file').click(),
+})
+
+function showWorkspaceError(error: unknown) {
+  if ($('chart-screen').hidden) chartsHome.showError(error)
+  else status(error instanceof Error ? error.message : String(error))
+}
+
+function readKuCoinArchive(payload: { graph: unknown; report: Parameters<typeof importLocalReport>[0] }) {
+  const report = importLocalReport(payload.report)
+  const imported = importCase(payload.graph, report.chapters)
+  if (imported.id !== KUCOIN_CASE_ID) throw new Error('Invalid KuCoin archive')
+  imported.reportSources = report.sources
+  return imported
+}
+
+let workspaceRecovery: Promise<boolean> | undefined
+
+function recoverWorkspaceKuCoin() {
+  return workspaceRecovery ??= (async () => {
+    if (location.protocol === 'file:' || document.getElementById('embedded-case')) return false
+    if (!await canRestoreCase(KUCOIN_CASE_ID)) return false
+    const response = await fetch(import.meta.env.BASE_URL + `cases/${KUCOIN_CASE_ID}.json`, {
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) return false
+    return restoreCase(readKuCoinArchive(await response.json()))
+  })()
+}
+
+function showHome() {
+  $('chart-screen').hidden = true
+  $('charts-home').hidden = false
+  const recovery = recoverWorkspaceKuCoin()
+  return chartsHome.refresh(recovery)
+}
+
+async function routeWorkspace(focusHome = false) {
+  const request = ++routeRequest
+  activeCase = false
+  investigation?.abort()
+  investigation = undefined
+  chatRequest++
+  await analysisQueue
+  if (request !== routeRequest) return
+  const route = location.hash.match(/^#chart\/(.+)$/)
+  if (!route) {
+    const loading = showHome()
+    if (focusHome) chartsHome.focus()
+    return loading
+  }
+  try {
+    const id = decodeURIComponent(route[1])
+    let record = await loadChart(id)
+    if (!record && id === demo.id) {
+      await saveCase(demo)
+      record = await loadChart(id)
+    }
+    if (!record && id === KUCOIN_CASE_ID && await recoverWorkspaceKuCoin()) record = await loadChart(id)
+    if (request !== routeRequest) return
+    if (!record) throw new Error('This chart does not exist in this workspace.')
+    $('charts-home').hidden = true
+    $('chart-screen').hidden = false
+    await openCase(record.data, record.edits)
+  } catch (error) {
+    if (request !== routeRequest) return
+    window.history.replaceState(null, '', '#charts')
+    await showHome()
+    if (request === routeRequest) showWorkspaceError(error)
+  }
+}
+
+function navigate(hash: string) {
+  if (location.hash !== hash) window.history.pushState(null, '', hash)
+  return routeWorkspace(hash === '#charts')
+}
+
+window.addEventListener('popstate', () => { void routeWorkspace() })
+
 async function loadWorkspace() {
   setReportOpen(matchMedia('(min-width: 701px)').matches)
   const embedded = document.getElementById('embedded-case')
-  if (!embedded?.textContent) {
-    openCase(demo)
-    const saved = await loadCase().catch(() => undefined)
-    if (saved && !openedByUser) openCase(saved)
-    return
-  }
+  if (!embedded?.textContent || location.hash) return routeWorkspace()
+  let imported: CaseData | undefined
   try {
-    const payload = JSON.parse(embedded.textContent)
-    const report = importLocalReport(payload.report)
-    const imported = importCase(payload.graph, report.chapters)
-    imported.reportSources = report.sources
-    embedded.remove()
-    const saved = await loadCase().catch(() => undefined)
-    if (!openedByUser) openCase(saved?.id === imported.id && saved.viewColumns ? saved : imported)
+    imported = readKuCoinArchive(JSON.parse(embedded.textContent))
+    if (!(await loadChart(imported.id))?.data.viewColumns) await saveCase(imported)
+    window.history.replaceState(null, '', chartRoute(imported.id))
+    await routeWorkspace()
   } catch (error) {
-    openCase(demo)
-    void queue.then(() => status(error instanceof Error ? error.message : String(error)))
+    if (imported) {
+      $('chart-screen').hidden = false
+      await openCase(imported)
+    } else await showHome()
+    showWorkspaceError(error)
   }
 }
 void loadWorkspace()
@@ -1532,6 +1728,10 @@ function inspectDrawing() {
 }
 
 if (import.meta.env.DEV) Object.assign(window, { flowCanvas: { canvasCoordinates, inspectDrawing,
+  elementStyle: (id: string) => {
+    const { stroke, fill, endArrowFill, lineWidth, halo } = graph.getElementRenderStyle(id)
+    return { stroke, fill, endArrowFill, lineWidth, halo }
+  },
   transactionHandlePoint: (id: string) => graph.getClientByCanvas(drawing.routes[id].handle),
   nodeActionPoint: (id: string, offset: Point) => graph.getClientByCanvas([
     drawing.positions[id][0] + offset[0], drawing.positions[id][1] + offset[1],

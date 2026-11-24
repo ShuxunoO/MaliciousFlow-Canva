@@ -19,7 +19,7 @@ test('collects an Ethereum transaction in two updates and restores the investiga
     }
   })
   await page.goto('/')
-  await page.getByRole('button', { name: 'New investigation' }).click()
+  await page.getByRole('button', { name: 'New Chart' }).click()
   await page.getByLabel('Investigation seed').fill(hash)
   await page.getByRole('button', { name: 'Collect and plot' }).click()
   await expect(page.locator('#status')).toContainText('1 transfer')
@@ -45,7 +45,7 @@ test('collects an Ethereum transaction in two updates and restores the investiga
 })
 
 test('applies Agent canvas commands and asks the user to confirm entity changes', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
   await page.evaluate(async () => {
     const api = (window as any).maliciousFlow
@@ -65,7 +65,7 @@ test('queries a confirmed historical Ethereum transaction from the configured pr
   test.skip(!process.env.FLOW_LIVE_BLOCKSCOUT, 'Set FLOW_LIVE_BLOCKSCOUT=1 for a public-provider test')
   test.setTimeout(120_000)
   await page.goto('/')
-  await page.getByRole('button', { name: 'New investigation' }).click()
+  await page.getByRole('button', { name: 'New Chart' }).click()
   await page.getByLabel('Investigation seed').fill('0xfb97742ba12997a223fdbb0063a07042f6aa5431dc0767572da3428256314dbf')
   await page.getByRole('button', { name: 'Collect and plot' }).click()
   await expect(page.locator('#status')).toContainText('1 transfer', { timeout: 60_000 })
@@ -73,7 +73,7 @@ test('queries a confirmed historical Ethereum transaction from the configured pr
 })
 
 test('hands the current selection and question to an external Agent handler', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
   await page.evaluate(async () => {
     const api = (window as any).maliciousFlow
@@ -106,8 +106,7 @@ test('follows a downstream transfer and opens its evidence from the Agent result
     return route.fulfill({ status: 404 })
   })
   await page.goto('/')
-  await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
-  await page.getByRole('button', { name: 'New investigation' }).click()
+  await page.getByRole('button', { name: 'New Chart' }).click()
   await page.getByLabel('Investigation seed').fill(seed)
   await page.getByLabel('Direction').selectOption('downstream')
   await page.getByLabel('Hops').selectOption('2')
@@ -121,7 +120,7 @@ test('follows a downstream transfer and opens its evidence from the Agent result
 })
 
 test('restores an unsent question after collapse and reload', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/#chart/canvas-workshop')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
   const toggle = page.getByRole('button', { name: 'Agent chat' })
   await toggle.click()

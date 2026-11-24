@@ -1,0 +1,33 @@
+{
+  "total": 446,
+  "by_category": {
+    "chains": 83,
+    "protocols": 161,
+    "exchanges": 31,
+    "wallets": 35,
+    "tokens": 107,
+    "infra": 29
+  },
+  "by_source": {
+    "defillama": 111,
+    "web3icons": 138,
+    "lxdao": 65,
+    "spothq": 43,
+    "aave": 48,
+    "lxdao_raster": 5,
+    "coingecko": 1,
+    "copy": 18,
+    "simple": 8,
+    "official": 9
+  },
+  "by_svg_kind": {
+    "traced": 109,
+    "vector": 309,
+    "embedded-raster": 20,
+    "mono-vector": 8
+  },
+  "png_size": 256,
+  "errors": [],
+  "orphans": [],
+  "ok": true
+}

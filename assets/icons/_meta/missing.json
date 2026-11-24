@@ -1,0 +1,115 @@
+{
+  "missing": [
+    {
+      "category": "protocols",
+      "name": "OpenOcean",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "protocols",
+      "name": "Karak",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "protocols",
+      "name": "Portal",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "wallets",
+      "name": "Web3Auth",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "wallets",
+      "name": "Fireblocks",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "wallets",
+      "name": "Copper",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "wallets",
+      "name": "Fordefi",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "tokens",
+      "name": "bSOL",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "infra",
+      "name": "UMA",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "infra",
+      "name": "Tellor",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "infra",
+      "name": "Moralis",
+      "reason": "no source"
+    },
+    {
+      "category": "infra",
+      "name": "Tenderly",
+      "reason": "no source"
+    },
+    {
+      "category": "infra",
+      "name": "Dune",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "infra",
+      "name": "Nansen",
+      "reason": "skipped by curation"
+    },
+    {
+      "category": "infra",
+      "name": "DefiLlama",
+      "reason": "no source"
+    },
+    {
+      "category": "infra",
+      "name": "CoinGecko",
+      "reason": "no source"
+    },
+    {
+      "category": "infra",
+      "name": "MetaSleuth",
+      "reason": "no source"
+    },
+    {
+      "category": "infra",
+      "name": "Space ID",
+      "reason": "no source"
+    },
+    {
+      "category": "infra",
+      "name": "Unstoppable Domains",
+      "reason": "no source"
+    },
+    {
+      "category": "infra",
+      "name": "Elliptic",
+      "reason": "no source"
+    },
+    {
+      "category": "infra",
+      "name": "SlowMist",
+      "reason": "no source"
+    },
+    {
+      "category": "infra",
+      "name": "PeckShield",
+      "reason": "no source"
+    }
+  ],
+  "errors": []
+}

@@ -3,7 +3,7 @@ import type { BaseEdgeStyleProps, GraphData, RectStyleProps } from '@antv/g6'
 import { flattenPath } from './geometry'
 import { SUMMARY_WIDTH, SUMMARY_HEIGHT, transactionSummary, type SummaryPosition } from './transaction-summaries'
 import { compactQuantity, type NodeAsset } from './node-summary'
-import type { Edits, FlowView, Point } from './case'
+import type { Edits, FlowEdge, FlowNode, FlowView, Point } from './case'
 import { NODE_HEIGHT, NODE_WIDTH, type Drawing, type Route } from './layout'
 import { addressAccent, addressIcon } from './address-icons'
 
@@ -151,10 +151,14 @@ export function makeGraph(container: HTMLElement, select: (item?: Selection) => 
       { type: 'drag-element', key: 'move', enable: (event: { targetType: string; target: { id: string } }) =>
         event.targetType === 'node' && selected()?.id === event.target.id },
     ],
-    node: { state: { selected: { stroke: '#6bf1cc', strokeOpacity: 1, lineWidth: 3 },
-      related: { stroke: '#a8c1ff', strokeOpacity: 1, lineWidth: 2 } } },
-    edge: { state: { selected: { stroke: '#f4cb7e', endArrowFill: '#f4cb7e', lineWidth: 3 },
-      related: { stroke: '#87dacc', endArrowFill: '#87dacc', lineWidth: 2.7 } } },
+    node: { state: {
+      selected: ({ style }) => ({ stroke: style?.stroke, strokeOpacity: 1, lineWidth: 3, halo: true, haloStroke: '#a8c1ff' }),
+      related: ({ style }) => ({ stroke: style?.stroke, strokeOpacity: 1, lineWidth: 2 }),
+    } },
+    edge: { state: {
+      selected: ({ style }) => ({ stroke: style?.stroke, endArrowFill: style?.endArrowFill, lineWidth: 3.5, halo: true, haloStroke: '#f4cb7e' }),
+      related: ({ style }) => ({ stroke: style?.stroke, endArrowFill: style?.endArrowFill, lineWidth: 2.7 }),
+    } },
   })
   graph.on(NodeEvent.CLICK, event => {
     if (!('target' in event && event.target && 'id' in event.target)) return
@@ -184,6 +188,14 @@ function cardFill(accent: string): string {
   return `rgb(${tint.join(',')})`
 }
 
+export function nodeColorStyle(accent: string) {
+  return { fill: cardFill(accent), stroke: accent, accent }
+}
+
+export function edgeColorStyle(color: string) {
+  return { stroke: color, endArrowFill: color }
+}
+
 function truncate(text: string, length: number) {
   const chars = Array.from(text)
   return chars.length > length ? chars.slice(0, length - 1).join('') + '…' : text
@@ -200,6 +212,14 @@ function edgeColor(asset?: string, assetId = '') {
   if (base) return base
   const hash = Array.from(assetId || asset).reduce((value, char) => Math.imul(value, 31) + char.charCodeAt(0) | 0, 0)
   return otherColors[(hash >>> 0) % otherColors.length]
+}
+
+export function displayColor(edits: Edits, type: 'node', item: FlowNode): string
+export function displayColor(edits: Edits, type: 'edge', item: FlowEdge): string
+export function displayColor(edits: Edits, type: Selection['type'], item: FlowNode | FlowEdge): string {
+  const custom = (type === 'node' ? edits.nodeColors : edits.edgeColors)?.[item.id]
+  if (custom && /^#[a-f\d]{6}$/i.test(custom)) return custom
+  return 'events' in item ? edgeColor(item.asset, item.events[0]?.assetId) : addressAccent(item.color)
 }
 
 export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets: Map<string, NodeAsset[]>,
@@ -225,7 +245,7 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
         'Out ' + compactQuantity(asset.outgoing),
         asset.balances.length ? compactQuantity(asset.balances) + (asset.prices.length ? ' / $' + compactQuantity(asset.prices) : '') : 'Bal –',
       ] : ['In –', 'Out –', 'Bal –']
-      const accent = addressAccent(node.color)
+      const accent = displayColor(edits, 'node', node)
       const note = edits.notes[node.id] ?? ''
       const muted = focusing && !relatedNodes.has(node.id)
       return {
@@ -233,11 +253,11 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
         states: primary.has(node.id) ? ['selected'] : relatedNodes.has(node.id) ? ['related'] : [],
         style: {
           x, y, size: [NODE_WIDTH, NODE_HEIGHT], radius: 10,
-          fill: cardFill(accent), fillOpacity: muted ? .45 : 1, stroke: accent, strokeOpacity: muted ? .22 : .64, lineWidth: 1.4,
+          ...nodeColorStyle(accent), fillOpacity: muted ? .45 : 1, strokeOpacity: muted ? .22 : .64, lineWidth: 1.4,
           title: node.name, address: node.address,
           roleImage: addressIcon(node),
           roleName: [node.role ?? 'Address', asset?.symbol].filter(Boolean).join(' · '),
-          note: truncate(note, 125), figures, accent, muted,
+          note: truncate(note, 125), figures, muted,
           collapsedIn: hidden.has(node.id + ':in'), collapsedOut: hidden.has(node.id + ':out'), cursor: 'grab',
         },
       }
@@ -245,7 +265,7 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
     edges: view.edges.map(edge => {
       const route = drawing.routes[edge.id]
       const first = edge.events[0]
-      const color = edgeColor(edge.asset, first?.assetId)
+      const color = displayColor(edits, 'edge', edge)
       const related = relatedEdges.has(edge.id)
       const parallel = route.parallel
       const summary = drawing.summaries[edge.id]
@@ -253,10 +273,10 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
         id: edge.id, type: 'transaction-path', source: edge.source, target: edge.target,
         states: selected?.id === edge.id ? ['selected'] : related ? ['related'] : [],
         style: {
-          route, summary, loop: false, stroke: color, opacity: focusing && !related ? .19 : 1,
+          route, summary, loop: false, ...edgeColorStyle(color), opacity: focusing && !related ? .19 : 1,
           lineWidth: parallel ? 1.45 : 1.55, increasedLineWidthForHitTesting: parallel?.compact ? 3 : parallel ? 5 : 9,
           lineDash: edge.events.length ? undefined : [6, 5], endArrow: true, endArrowType: 'triangle',
-          endArrowFill: color, endArrowSize: parallel ? 6 : 10, cursor: 'pointer', labelAutoRotate: false,
+          endArrowSize: parallel ? 6 : 10, cursor: 'pointer', labelAutoRotate: false,
           labelText: first ? transactionSummary(edge) : undefined,
           labelFontSize: 10, labelFill: '#d7e5ef', labelBackground: true, labelBackgroundFill: '#111d26',
           labelPadding: [3, 4], labelBackgroundRadius: 3,
