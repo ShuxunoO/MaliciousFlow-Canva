@@ -23,7 +23,9 @@ A reference can be an address ID, entity ID, graph edge ID, transaction event ID
 ### View options
 
 - `ref` locates a graph object or evidence record.
-- `filters` replaces the current filter object. It may include `address`, `asset`, `from`, `to`, `core` and `viewId`. An address filter accepts an address or entity ID. `asset` uses the stable asset ID from the case, such as `1:native` for ETH. `from` is inclusive and `to` is exclusive.
+- `filters` replaces the current filter object. It may include `address`, `asset`, `from`, `to`, `core`, `viewId` and `includeContext`. An address filter accepts an address or entity ID. `asset` uses the stable asset ID from the case, such as `1:native` for ETH. `from` is inclusive and `to` is exclusive. Set `includeContext: false` to hide transfers marked as historical or comparison activity.
+- For KuCoin, `viewId` accepts `all`, `core`, `original`, `return`, or `batch-D1` through `batch-D8`. Omit `viewId` to select the full network, or pass `core: true` to open the core view.
+- `edgeLabels` accepts `auto`, `on`, or `off` and is returned by `set_view`. Automatic mode shows persistent labels on smaller graphs. The on setting uses the available label positions from the router.
 - `grouped` turns entity aggregation on or off. `branch` accepts `{ id, direction: 'in' | 'out', collapsed }`.
 - `fit` fits visible nodes to the canvas. `zoom` sets the zoom factor and `pan: [dx, dy]` translates the viewport.
 

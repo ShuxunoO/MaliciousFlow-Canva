@@ -10,9 +10,12 @@ const kucoin = {
     asset: 'USDC', token: '0xCA', amount: '1.000001', exhibit: 'E-1-1', sources: ['v4'],
   }, {
     id: 'case-csv:two', source: 'eth:a', target: 'eth:b', hash: '0x1', timestamp: '2020-02-01T00:00:00Z',
-    asset: 'USDC', token: '0xCB', amount: '2', sources: ['case-csv'],
+    asset: 'USDC', token: '0xCB', amount: '2', sources: ['case-csv'], section: '6.1',
   }],
-  views: { all: { nodes: [{ id: 'eth:a', data: { layoutColumn: 3 } }] }, core: { edges: [{ data: { events: [0] } }] } },
+  views: {
+    all: { nodes: [{ id: 'eth:a', data: { layoutColumn: 3 } }] },
+    core: { nodes: [{ id: 'eth:a', data: { layoutColumn: 1 } }], edges: [{ data: { events: [0] } }] },
+  },
 }
 
 describe('case import', () => {
@@ -39,5 +42,12 @@ describe('case import', () => {
   it('supports the normal case model and optional chapters', () => {
     expect(importCase(demo, []).chapters).toEqual([])
     expect(() => importCase(null)).toThrow('Invalid case format')
+  })
+
+  it('projects scope-specific columns and filters historical events before aggregation', () => {
+    const data = importCase(kucoin)
+    expect(project(data, emptyEdits(), { core: true }).nodes.find(node => node.id === 'eth:a')?.column).toBe(1)
+    expect(project(data, emptyEdits(), { includeContext: false }).edges.map(edge => edge.amount)).toEqual(['1.000001'])
+    expect(project(data, emptyEdits(), { includeContext: false }, false, undefined, 'case-csv:two').count).toBe(2)
   })
 })

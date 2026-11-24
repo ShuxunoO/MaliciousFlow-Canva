@@ -4,6 +4,7 @@ import { flattenPath } from './geometry'
 import { compactQuantity, type NodeAsset } from './node-summary'
 import type { Edits, FlowView, Point } from './case'
 import { NODE_HEIGHT, NODE_WIDTH, type Drawing, type Route } from './layout'
+import { addressAccent, addressIcon } from './address-icons'
 
 const rendered = new WeakMap<Graph, Map<string, BaseFlowNode | TransactionEdge>>()
 
@@ -18,7 +19,7 @@ interface FlowNodeStyle extends RectStyleProps {
   title: string
   address: string
   roleName: string
-  roleGlyph?: string
+  roleImage?: string
   note: string
   figures: string[]
   accent: string
@@ -33,13 +34,16 @@ export class BaseFlowNode extends Rect {
   }
 
   protected drawLabelShape(attributes: Required<FlowNodeStyle>, container: NonNullable<Parameters<Rect['render']>[1]>) {
-    const { title, address, roleName, roleGlyph, note, figures, accent, collapsedIn, collapsedOut } = attributes
+    const { title, address, roleName, roleImage, note, figures, accent, collapsedIn, collapsedOut } = attributes
     const text = (key: string, value: string, x: number, y: number, fill: string, fontSize = 10, more = {}) =>
       this.upsert(key, 'text', { x, y, text: value, fill, fontFamily: 'Inter, sans-serif',
         fontSize, textBaseline: 'middle', pointerEvents: 'none', ...more }, container)
     this.upsert('role-icon', 'rect', { x: -101, y: -35, width: 25, height: 25, radius: 6,
-      fill: accent, opacity: .9, pointerEvents: 'none' }, container)
-    text('role-glyph', roleGlyph || this.glyph, -88.5, -22.5, '#10151e', 14, { textAlign: 'center', fontWeight: 700 })
+      fill: accent, opacity: roleImage ? .35 : .9, pointerEvents: 'none' }, container)
+    this.upsert('role-image', 'image', roleImage ? {
+      src: roleImage, x: -98.5, y: -32.5, width: 20, height: 20, pointerEvents: 'none',
+    } : false, container)
+    if (!roleImage) text('role-glyph', this.glyph, -88.5, -22.5, '#10151e', 14, { textAlign: 'center', fontWeight: 700 })
     text('title', title, -69, -24, '#edf2ff', 15, { fontWeight: 650 })
     text('role', roleName, -69, -9, '#b4c0da', 10)
     text('address', address, -101, 35, '#b1bfdb', 11, { fontFamily: 'monospace' })
@@ -94,7 +98,8 @@ export function renderedSnapshot(graph: Graph, view: FlowView, name: string) {
   }
   return {
     geometry: 'rendered', view: name, tolerance: .5,
-    nodes: view.nodes.map(node => ({ id: node.id, box: boxFor(node.id, 'key') })),
+    nodes: view.nodes.map(node => ({ id: node.id, box: boxFor(node.id, 'key'),
+      hasIcon: !!elements.get(node.id)?.getShape('role-image') })),
     edges: view.edges.map(edge => {
       const key = elements.get(edge.id)?.getShape('key')
       if (!key) throw new Error('Transaction edge was not rendered ' + edge.id)
@@ -116,7 +121,7 @@ export function makeGraph(container: HTMLElement, select: (item?: Selection) => 
   move: (id: string, point: Point) => void, selected: () => Selection | undefined,
   toggleBranch: (id: string, direction: 'in' | 'out') => void) {
   const graph = new Graph({
-    container, autoResize: true, padding: 56, animation: false, zoomRange: [0.008, 3],
+    container, padding: 56, animation: false, zoomRange: [0.008, 3],
     behaviors: [
       'drag-canvas', 'zoom-canvas',
       { type: 'drag-element', key: 'move', enable: (event: { targetType: string; target: { id: string } }) =>
@@ -156,9 +161,11 @@ function truncate(text: string, length: number) {
   return chars.length > length ? chars.slice(0, length - 1).join('') + '…' : text
 }
 
+export type EdgeLabels = 'auto' | 'on' | 'off'
+
 export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets: Map<string, NodeAsset[]>,
-  hidden: Set<string>, selected?: Selection): GraphData {
-  const showAllLabels = view.edges.length < 190
+  hidden: Set<string>, selected?: Selection, labels: EdgeLabels = 'auto'): GraphData {
+  const showAllLabels = labels === 'on' || labels === 'auto' && view.edges.length < 190
   return {
     nodes: view.nodes.map(node => {
       const [x, y] = drawing.positions[node.id]
@@ -168,7 +175,7 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
         'Out ' + compactQuantity(asset.outgoing),
         asset.balances.length ? compactQuantity(asset.balances) + (asset.prices.length ? ' / $' + compactQuantity(asset.prices) : '') : 'Bal –',
       ] : ['In –', 'Out –', 'Bal –']
-      const accent = node.color && /^#[a-f\d]{6}$/i.test(node.color) ? node.color : '#93aafa'
+      const accent = addressAccent(node.color)
       const short = node.address.length > 24 ? node.address.slice(0, 12) + '…' + node.address.slice(-7) : node.address
       const note = edits.notes[node.id] ?? ''
       return {
@@ -177,7 +184,7 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
           x, y, size: [NODE_WIDTH, NODE_HEIGHT], radius: 10,
           fill: cardFill(accent), stroke: accent, strokeOpacity: .64, lineWidth: 1.4,
           title: truncate(node.name, 19), address: short,
-          roleGlyph: node.role === 'Exchange wallet' ? '⇄' : node.role === 'Protocol pool' ? '◈' : undefined,
+          roleImage: addressIcon(node),
           roleName: truncate([node.role ?? 'Address', asset?.symbol].filter(Boolean).join(' · '), 26),
           note: note ? truncate(note, 22) : '', figures: figures.map(item => truncate(item, 14)), accent,
           collapsedIn: hidden.has(node.id + ':in'), collapsedOut: hidden.has(node.id + ':out'), cursor: 'grab',
@@ -197,7 +204,7 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
           route, loop: false, stroke: color, lineWidth: 1.55, increasedLineWidthForHitTesting: 9,
           lineDash: edge.events.length ? undefined : [6, 5], endArrow: true, endArrowType: 'triangle',
           endArrowFill: color, endArrowSize: 10, cursor: 'pointer', labelAutoRotate: false,
-          labelText: (showAllLabels && drawing.labels.has(edge.id)) || selected?.id === edge.id
+          labelText: (showAllLabels && drawing.labels.has(edge.id)) || (labels !== 'off' && selected?.id === edge.id)
             ? (first ? [period + ' UTC', edge.amount + ' ' + edge.asset,
               ...(edge.events.length > 1 ? [edge.events.length + ' transfers'] : [])].join('  ·  ') : edits.notes[edge.id] ?? edge.note)
               + (edge.events.length && edits.notes[edge.id] ? '  ·  ' + truncate(edits.notes[edge.id], 24) : '')

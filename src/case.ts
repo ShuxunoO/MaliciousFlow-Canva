@@ -8,6 +8,7 @@ export interface Address {
   address: string
   name: string
   role?: string
+  icon?: string
   column?: number
   color?: string
 }
@@ -27,6 +28,7 @@ export interface Transfer {
   sources?: string[]
   note?: string
   usd?: string
+  context?: boolean
 }
 
 export interface Balance {
@@ -59,6 +61,7 @@ export interface CaseData {
   reportSources?: [string, string[]][]
   core?: string[]
   views?: Record<string, string[]>
+  viewColumns?: Record<string, Record<string, number>>
 }
 
 export interface Entity { id: string; name: string; members: string[] }
@@ -77,7 +80,7 @@ export interface Edits {
   conclusions?: Record<string, Conclusion>
 }
 
-export interface Filters { asset?: string; from?: string; to?: string; address?: string; core?: boolean; viewId?: string }
+export interface Filters { asset?: string; from?: string; to?: string; address?: string; core?: boolean; viewId?: string; includeContext?: boolean }
 export interface FlowNode extends Address { members?: string[] }
 export interface FlowEdge {
   id: string
@@ -138,10 +141,13 @@ export function transact(previous: CaseData, incoming: Pick<CaseData, 'addresses
 
 export function project(data: CaseData, edits: Edits, filters: Filters = {}, grouped = false,
   hidden = new Set<string>(), reveal?: string): FlowView {
-  const scope = filters.viewId ? data.views?.[filters.viewId] : filters.core ? data.core : undefined
+  const viewId = filters.viewId ?? (filters.core ? 'core' : 'all')
+  const scope = viewId === 'core' ? data.views?.core ?? data.core : data.views?.[viewId]
   const core = scope ? new Set(scope) : undefined
+  const columns = data.viewColumns?.[viewId]
   const mapping = new Map<string, string>()
-  const nodes = new Map<string, FlowNode>(data.addresses.map(item => [item.id, { ...item, name: edits.names[item.id] ?? item.name }]))
+  const nodes = new Map<string, FlowNode>(data.addresses.map(item => [item.id,
+    { ...item, column: columns?.[item.id] ?? item.column, name: edits.names[item.id] ?? item.name }]))
   if (grouped) for (const entity of edits.entities) {
     const members = entity.members.filter(id => nodes.has(id))
     if (!members.length) continue
@@ -164,6 +170,7 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
     const forced = event.id === reveal || event.evidence === reveal && !!reveal
     const time = Date.parse(event.time)
     if (!forced && ((core && !core.has(event.id) && !included.has(event.id)) || (filters.asset && event.assetId !== filters.asset)
+      || (filters.includeContext === false && event.context)
       || time < from || time >= to || (filterAddresses && ![event.source, event.target, source, target].some(id => filterAddresses.has(id)))
       || hidden.has(source + ':out') || hidden.has(target + ':in'))) continue
     count++

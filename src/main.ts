@@ -10,7 +10,8 @@ import { importLocalReport } from './report-import'
 import { loadCase, saveCase } from './storage'
 import { demo } from './demo'
 import { layout, NODE_HEIGHT, NODE_WIDTH } from './layout'
-import { graphData, makeGraph, renderedSnapshot, type Selection } from './renderer'
+import { graphData, makeGraph, renderedSnapshot, type EdgeLabels, type Selection } from './renderer'
+import { addressAccent, addressIcon } from './address-icons'
 import { nodeAssets } from './node-summary'
 import './style.css'
 
@@ -23,7 +24,7 @@ app.innerHTML = `
     <div class="toolbar">
       <button id="demo">Demo</button><button id="new-case">New investigation</button><button id="import">Import case</button>
       <input type="file" id="case-file" accept="application/json,.json" multiple hidden>
-      <button id="undo">Undo</button><button id="redo">Redo</button><button id="report-toggle" aria-pressed="true">Report</button>
+      <button id="undo">Undo</button><button id="redo">Redo</button>
     </div>
   </header>
   <div class="workspace">
@@ -33,21 +34,33 @@ app.innerHTML = `
         <button id="connect" aria-pressed="false">Connect</button>
         <select id="address-filter" aria-label="Address or entity"></select>
         <div style="position:relative"><input id="search" type="search" aria-label="Address, name or transaction hash" placeholder="Search address, name or hash"><div id="results" hidden></div></div>
-        <select id="asset" aria-label="Token"></select><select id="scope" aria-label="Case view" hidden><option value="core">Core view</option><option value="all">All transfers</option></select>
+        <select id="asset" aria-label="Token"></select><button id="scopes-toggle" aria-controls="scope-panel" aria-expanded="true" hidden>Network scope</button>
         <label>From <input type="date" id="from" aria-label="Start date UTC"></label>
         <label>Before <input type="date" id="to" aria-label="End date UTC"></label>
         <button id="grouped" aria-pressed="false">Group by entity</button><button id="reset">Reset filters</button>
       </div>
-      <div id="stage">
+      <div class="canvas-body">
+        <aside id="scope-panel" aria-label="Network scope" hidden>
+          <h2>Network scope</h2><div id="scope-options"></div>
+          <label class="context-check"><input id="include-context" type="checkbox" checked>Include historical &amp; comparison activity</label>
+          <label for="edge-labels">Transaction labels</label>
+          <select id="edge-labels"><option value="auto">Automatic</option><option value="on">Show amount and count</option><option value="off">Hide</option></select>
+          <details id="role-legend" open><summary>Address roles</summary><ul id="scope-legend"></ul></details>
+        </aside>
+        <div id="stage">
         <div id="graph"></div><div id="empty" hidden>No transfers match the current filters</div>
-        <aside id="selection" aria-label="Selection details" hidden></aside>
         <button id="handle" aria-label="Drag transaction edge" hidden></button>
         <div id="footer"><div class="actions"><button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit">Fit</button></div><output id="status" aria-live="polite"></output></div>
         <section id="agent-panel" aria-label="Agent chat" hidden></section>
         <button id="agent-toggle" aria-label="Agent chat" aria-expanded="false">✦</button>
+        </div>
+        <aside id="selection" aria-label="Selection details" hidden></aside>
       </div>
     </section>
-    <aside id="report" aria-label="Case report"><header class="report-header section-heading"><h2>Case report</h2><button id="draft">New draft</button></header><div id="report-content"></div></aside>
+    <div class="report-dock">
+      <button id="report-toggle" aria-controls="report" aria-expanded="true" aria-pressed="true" aria-label="Collapse report"><span aria-hidden="true">›</span><span>Report</span></button>
+      <aside id="report" aria-label="Case report"><header class="report-header section-heading"><h2>Case report</h2><button id="draft">New draft</button></header><div id="report-content"></div></aside>
+    </div>
   </div>`
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id)! as T
@@ -57,6 +70,7 @@ const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, characte
 let data = demo
 let selection: Selection | undefined
 let filters: Filters = {}
+let edgeLabels: EdgeLabels = 'auto'
 let hidden = new Set<string>()
 let grouped = false
 let revealed: string | undefined
@@ -88,6 +102,16 @@ const graph = makeGraph($('graph'), setSelection, (id, point) => {
   edit(edits => { edits.positions[id] = point })
 }, () => selection, toggleBranch)
 const status = (text: string) => { $('status').textContent = text }
+let graphSize = [0, 0]
+function resizeGraph() {
+  const { clientWidth: width, clientHeight: height } = $('graph')
+  if (width && height && (width !== graphSize[0] || height !== graphSize[1])) {
+    graphSize = [width, height]
+    graph.setSize(width, height)
+    updateHandle()
+  }
+}
+new ResizeObserver(resizeGraph).observe($('graph'))
 
 function readEdits(id: string): Edits | HistorySnapshot | undefined {
   try {
@@ -162,12 +186,24 @@ function render(fit = false, focus?: string, refreshInspector = true): Promise<v
   queue = queue.catch(() => {}).then(async () => {
     view = project(data, history.value, filters, grouped, hidden, revealed)
     if (selection && ![...view.nodes, ...view.edges].some(item => item.id === selection?.id)) selection = undefined
+    const showInspector = !!selection && !linking
+    const anchor = selection && (drawing.positions[selection.id] ?? drawing.routes[selection.id]?.handle)
+    const beforeResize = refreshInspector && $('selection').hidden === showInspector && anchor && !fit && !focus
+      ? graph.getClientByCanvas(anchor) : undefined
+    if (refreshInspector) $('selection').hidden = !showInspector
+    resizeGraph()
     drawing = layout(view, keepPositions ? { ...drawing.positions, ...history.value.positions } : history.value.positions,
       history.value.bends, keepPositions ? drawing : undefined)
     keepPositions = false
     assetsByNode = nodeAssets(data, view, filters.to)
-    graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection))
+    graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection, edgeLabels))
     await graph.render()
+    if (beforeResize && anchor) {
+      const [x, y] = graph.getClientByCanvas(anchor)
+      const rect = $('graph').getBoundingClientRect()
+      const target = Math.max(rect.left + 30, Math.min(beforeResize[0], rect.right - 30))
+      await graph.translateBy([target - x, beforeResize[1] - y])
+    }
     if (fit && view.nodes.length) await graph.fitView()
     if (focus) {
       if (graph.getZoom() < .62) await graph.zoomTo(.62)
@@ -196,7 +232,8 @@ function openCase(next: CaseData) {
   entityPreview = undefined
   loadConversation()
   selection = undefined
-  filters = { core: !!next.core }
+  filters = { core: !!(next.core ?? next.views?.core) }
+  edgeLabels = 'auto'
   grouped = false
   hidden = new Set()
   revealed = undefined
@@ -207,12 +244,7 @@ function openCase(next: CaseData) {
   timelinePage = 0
   history = History.restore(readEdits(next.id))
   $<HTMLInputElement>('case-title').value = history.value.title ?? next.title
-  $('scope').hidden = !next.core
-  const scopes = Object.keys(next.views ?? {}).filter(id => id !== 'core')
-  $('scope').innerHTML = '<option value="core">Core view</option><option value="all">All transfers</option>' + scopes
-    .map(id => `<option value="${esc(id)}">${id === 'return' ? 'Return flows' : id === 'original' ? 'Original view'
-      : 'Batch ' + esc(id.replace(/^batch-/, ''))}</option>`).join('')
-  $<HTMLSelectElement>('scope').value = next.core ? 'core' : 'all'
+  renderScopes()
   $('grouped').setAttribute('aria-pressed', 'false')
   updateAssets()
   updateAddresses()
@@ -223,6 +255,48 @@ function openCase(next: CaseData) {
   $('results').hidden = true
   renderReport()
   void render(true)
+}
+
+const scopeNames: Record<string, [string, string]> = {
+  all: ['Full network', 'All transfer records'],
+  core: ['Core paths', 'Original graph and key v4 evidence'],
+  original: ['Original data', 'Original graph transfers in the new layout'],
+  return: ['Public return flow', 'Withdrawals through G2 and D1 to a later deposit'],
+}
+const activeScope = () => filters.viewId ?? (filters.core ? 'core' : 'all')
+
+function syncScopes() {
+  for (const button of $('scope-options').querySelectorAll<HTMLButtonElement>('[data-scope]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.scope === activeScope()))
+  }
+  $<HTMLInputElement>('include-context').checked = filters.includeContext !== false
+  $<HTMLSelectElement>('edge-labels').value = edgeLabels
+}
+
+function setScopesOpen(open: boolean) {
+  $('scope-panel').hidden = !open
+  $('scopes-toggle').setAttribute('aria-expanded', String(open))
+}
+
+function renderScopes() {
+  const ids = new Set(['all', ...Object.keys(data.views ?? {})])
+  if (data.core) ids.add('core')
+  const hasControls = ids.size > 1 || data.transfers.some(event => event.context)
+  $('scopes-toggle').hidden = !hasControls
+  setScopesOpen(hasControls && matchMedia('(min-width: 1051px)').matches)
+  const scopes = [...ids].filter(id => !/^batch-D\d+$/.test(id))
+  const batches = [...ids].filter(id => /^batch-D\d+$/.test(id)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))
+  const button = (id: string, title: string, description?: string) =>
+    `<button data-scope="${esc(id)}"><strong>${esc(title)}</strong>${description ? `<small>${esc(description)}</small>` : ''}</button>`
+  $('scope-options').innerHTML = '<div class="scope-list">' +
+    scopes.map(id => button(id, scopeNames[id]?.[0] ?? id, scopeNames[id]?.[1])).join('') + '</div>' +
+    (batches.length ? '<h3>Batch activity</h3><div class="scope-batches">' +
+      batches.map(id => button(id, id.slice(6))).join('') + '</div>' : '')
+  const roles = new Map(data.addresses.flatMap(node => node.role ? [[node.role, addressAccent(node.color)]] : []))
+  $('role-legend').hidden = !roles.size
+  $('scope-legend').innerHTML = [...roles].sort(([a], [b]) => a.localeCompare(b)).map(([role, color]) =>
+    `<li><i style="background:${color}"></i>${esc(role)}</li>`).join('')
+  syncScopes()
 }
 
 function updateAssets() {
@@ -268,8 +342,9 @@ function addRelationship(source: string, target: string, note = '') {
   return id
 }
 
-function eventRows(edge: FlowEdge): string {
-  const entries = edge.events.slice(page * 8, (page + 1) * 8).map(item => `
+function eventRows(events: FlowEdge['events']): string {
+  page = Math.max(0, Math.min(page, Math.ceil(events.length / 8) - 1))
+  const entries = events.slice(page * 8, (page + 1) * 8).map(item => `
     <div class="transfer stack">
       <strong>${esc(item.amount)} ${esc(item.asset)}</strong>
       <div class="subtle">${esc(item.time)}${item.usd ? ' · $' + esc(item.usd) : ''}</div>
@@ -278,17 +353,27 @@ function eventRows(edge: FlowEdge): string {
       <button class="ref" data-report="${esc(item.id)}">${item.evidence ? 'Evidence ' + esc(item.evidence) : 'Transaction source'}</button>
       <label>Transaction note<textarea data-note="${esc(item.id)}">${esc(history.value.notes[item.id] ?? item.note)}</textarea></label>
     </div>`).join('')
-  return entries + (edge.events.length > 8
-    ? `<div class="actions"><button data-page="-1" ${page === 0 ? 'disabled' : ''}>Previous</button><small>${page + 1} / ${Math.ceil(edge.events.length / 8)}</small><button data-page="1" ${(page + 1) * 8 >= edge.events.length ? 'disabled' : ''}>Next</button></div>` : '')
+  return entries + (events.length > 8
+    ? `<div class="actions"><button data-page="-1" ${page === 0 ? 'disabled' : ''}>Previous</button><small>${page + 1} / ${Math.ceil(events.length / 8)}</small><button data-page="1" ${(page + 1) * 8 >= events.length ? 'disabled' : ''}>Next</button></div>` : '')
 }
 
 function renderSelection() {
   const panel = $('selection')
   const node = selection?.type === 'node' ? view.nodes.find(item => item.id === selection?.id) : undefined
   const edge = selection?.type === 'edge' ? view.edges.find(item => item.id === selection?.id) : undefined
-  panel.hidden = !node && !edge
+  panel.hidden = linking || !node && !edge
   const close = (revealed ? '<button data-return-view>Return to previous view</button>' : '') + '<button data-close aria-label="Close details">×</button>'
   if (node) {
+    const icon = addressIcon(node)
+    const adjacent = view.edges.filter(item => item.source === node.id || item.target === node.id)
+    const related = adjacent.flatMap(item => item.events).sort((a, b) =>
+      a.time.localeCompare(b.time) || a.id.localeCompare(b.id))
+    const relatedOpen = panel.querySelector<HTMLDetailsElement>('[data-related]')?.open
+    const path = (item: FlowEdge) => {
+      const outbound = item.source === node.id
+      const peer = view.nodes.find(other => other.id === (outbound ? item.target : item.source))
+      return `<button data-focus="${esc(item.id)}"><span>${outbound ? '→' : '←'} ${esc(peer?.name)}</span><small>${esc(item.asset ? item.amount + ' ' + item.asset : 'Relationship')}</small></button>`
+    }
     const balanceRows = assetsByNode.get(node.id) ?? []
     const snapshotRecords = latestBalances(data, node.members ?? [node.id], filters.to)
     const totals = (rows: string[]) => rows.length ? esc(sumDecimal(rows)) : '—'
@@ -296,6 +381,7 @@ function renderSelection() {
       <td>${totals(item.incoming)}</td><td>${totals(item.outgoing)}</td><td>${totals(item.balances)}</td>
       <td>${item.prices.length ? '$' + totals(item.prices) + (item.prices.length < item.snapshots ? ' *' : '') : '—'}</td></tr>`).join('')
     panel.innerHTML = `<div class="section-heading"><h3>${esc(node.name)}</h3>${close}</div><div class="stack">
+      <div class="inspector-role">${icon ? `<img src="${esc(icon)}" alt="" width="22" height="22">` : ''}<small>${esc(node.role ?? 'Address')}</small></div>
       <code class="mono">${esc(node.address)}</code>
       ${node.members ? `<details><summary>Member addresses</summary><p class="mono">${node.members.map(id => esc(data.addresses.find(item => item.id === id)?.address)).join('<br>')}</p></details>` : ''}
       ${tokenRows ? `<div class="report-table"><table aria-label="Token flows and balances"><thead>
@@ -309,6 +395,9 @@ function renderSelection() {
       <div class="actions"><button data-direction="in">${hidden.has(node.id + ':in') ? 'Expand' : 'Collapse'} inflow</button><button data-direction="out">${hidden.has(node.id + ':out') ? 'Expand' : 'Collapse'} outflow</button></div>
       <div class="actions"><button data-neighbors>Filter to selection</button>${node.members ? '<button data-members>Edit members</button><button data-ungroup>Ungroup</button>'
         : '<button data-group>Assign to entity</button><button data-link>Add relationship</button>'}</div>
+      ${adjacent.length ? `<details open><summary>Adjacent paths · ${adjacent.length}</summary><div class="inspector-paths">
+        ${adjacent.slice(0, 8).map(path).join('')}</div>${adjacent.length > 8 ? '<small>Showing the first 8 paths. Filter to selection to explore all paths on the canvas.</small>' : ''}</details>` : ''}
+      ${related.length ? `<details data-related ${relatedOpen ? 'open' : ''}><summary>Related transfers · ${related.length}</summary>${eventRows(related)}</details>` : ''}
     </div>`
   }
   if (edge) {
@@ -318,7 +407,7 @@ function renderSelection() {
       <div>${esc(view.nodes.find(node => node.id === edge.source)?.name)} → ${esc(view.nodes.find(node => node.id === edge.target)?.name)}</div>
       ${edge.asset ? `<div class="subtle">${esc(edge.amount)} ${esc(edge.asset)} · ${edge.events.length} transfers<br>USD ${esc(usd)}</div>` : ''}
       <label>Edge note<textarea data-note="${esc(edge.id)}">${esc(history.value.notes[edge.id] ?? edge.note)}</textarea></label>
-      ${eventRows(edge)}</div>`
+      ${eventRows(edge.events)}</div>`
   }
 }
 
@@ -404,8 +493,7 @@ function renderReport() {
 
 function reportEvidence(reference: string) {
   const panel = $('report')
-  document.querySelector('.workspace')!.setAttribute('data-report', 'open')
-  $('report-toggle').setAttribute('aria-pressed', 'true')
+  setReportOpen(true)
   panel.querySelector('#report-evidence')?.remove()
   const item = findReference(reference)
   if (!item) return
@@ -414,7 +502,7 @@ function reportEvidence(reference: string) {
       <p>${esc(item.amount)} ${esc(item.asset)} · ${esc(item.time)}</p><code class="mono">${esc(item.hash)}</code>
       <p>${esc(item.sources?.join(' · ') || 'Source unavailable')}${item.verification ? ' · ' + esc(item.verification) : ''}</p>
       ${refsMarkup([item.evidence ?? item.id])}</article>`)
-  panel.querySelector('#report-evidence')?.scrollIntoView({ block: 'nearest' })
+  panel.scrollTop = 0
 }
 
 function renderAgentContext() {
@@ -425,17 +513,28 @@ function renderAgentContext() {
 }
 
 function applyFilters(fit = true) {
-  const scope = value('scope')
-  filters = { asset: value('asset') || undefined, address: value('address-filter') || undefined, from: value('from') || undefined, to: value('to') || undefined,
-    core: scope === 'core', viewId: scope === 'all' || scope === 'core' ? undefined : scope }
+  filters = { ...filters, asset: value('asset') || undefined, address: value('address-filter') || undefined,
+    from: value('from') || undefined, to: value('to') || undefined,
+    includeContext: $<HTMLInputElement>('include-context').checked ? undefined : false }
   revealed = undefined
   void render(fit)
 }
 
-for (const id of ['asset', 'scope', 'from', 'to', 'address-filter']) $(id).addEventListener('change', () => applyFilters())
+for (const id of ['asset', 'include-context', 'from', 'to', 'address-filter']) $(id).addEventListener('change', () => applyFilters())
+$('scope-options').onclick = event => {
+  const id = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-scope]')?.dataset.scope
+  if (!id) return
+  filters = { ...filters, core: id === 'core', viewId: id === 'all' || id === 'core' ? undefined : id }
+  hidden.clear()
+  syncScopes()
+  applyFilters()
+}
+$('scopes-toggle').onclick = () => setScopesOpen($('scope-panel').hidden)
+$('edge-labels').onchange = () => { edgeLabels = value('edge-labels') as EdgeLabels; void render() }
 $('reset').onclick = () => {
   for (const id of ['asset', 'from', 'to', 'search', 'address-filter']) $<HTMLInputElement>(id).value = ''
   $('results').hidden = true
+  $<HTMLInputElement>('include-context').checked = true
   hidden.clear()
   applyFilters()
 }
@@ -470,6 +569,7 @@ $('connect').onclick = () => {
   linkSource = selection?.type === 'node' ? selection.id : undefined
   $('connect').setAttribute('aria-pressed', 'true')
   updateLinkStatus()
+  void render()
 }
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && linking) {
@@ -517,11 +617,15 @@ $('grouped').onclick = () => {
 $('fit').onclick = () => { void graph.fitView().then(updateHandle) }
 $('zoom-in').onclick = () => { void graph.zoomBy(1.25).then(updateHandle) }
 $('zoom-out').onclick = () => { void graph.zoomBy(.8).then(updateHandle) }
-$('report-toggle').onclick = () => {
-  const open = $('report-toggle').getAttribute('aria-pressed') !== 'true'
-  $('report-toggle').setAttribute('aria-pressed', String(open))
+function setReportOpen(open: boolean) {
+  const toggle = $('report-toggle')
+  toggle.setAttribute('aria-pressed', String(open))
+  toggle.setAttribute('aria-expanded', String(open))
+  toggle.setAttribute('aria-label', open ? 'Collapse report' : 'Expand report')
+  $('report').inert = !open
   document.querySelector('.workspace')!.setAttribute('data-report', open ? 'open' : 'closed')
 }
+$('report-toggle').onclick = () => setReportOpen($('report-toggle').getAttribute('aria-expanded') !== 'true')
 $('search').addEventListener('input', () => {
   const query = value('search').trim().toLowerCase()
   const results = $('results')
@@ -952,6 +1056,7 @@ Object.assign(window, {
       agentHandler = handler
     },
     set_view: async (input?: string | { ref?: string; filters?: Filters; grouped?: boolean;
+      edgeLabels?: EdgeLabels;
       branch?: { id: string; direction: 'in' | 'out'; collapsed: boolean }; fit?: boolean; zoom?: number; pan?: Point; clearSelection?: boolean }) => {
       const ref = typeof input === 'string' ? input : input?.ref
       if (input && typeof input === 'object') {
@@ -961,8 +1066,12 @@ Object.assign(window, {
           updateAddresses()
           $<HTMLInputElement>('from').value = filters.from?.slice(0, 10) ?? ''
           $<HTMLInputElement>('to').value = filters.to?.slice(0, 10) ?? ''
-          $<HTMLSelectElement>('scope').value = filters.viewId ?? (filters.core ? 'core' : 'all')
+          syncScopes()
           revealed = undefined
+        }
+        if (input.edgeLabels) {
+          edgeLabels = input.edgeLabels
+          syncScopes()
         }
         if (input.grouped !== undefined) {
           grouped = input.grouped
@@ -985,7 +1094,7 @@ Object.assign(window, {
       }
       if (ref) await locate(ref)
       return { caseId: data.id, revision: data.analysis?.revision ?? 0, selection: selection && { ...selection }, filters: { ...filters },
-        visibleNodes: view.nodes.length, visibleTransfers: view.count, grouped, zoom: graph.getZoom() }
+        visibleNodes: view.nodes.length, visibleTransfers: view.count, grouped, edgeLabels, zoom: graph.getZoom() }
     },
     edit_canvas: (command: CanvasCommand) => {
       if (command.action === 'undo' || command.action === 'redo') {
@@ -1056,8 +1165,29 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape') cancelDrag()
 })
 
-openCase(demo)
-void loadCase().then(saved => { if (saved && !openedByUser) openCase(saved) }).catch(() => {})
+async function loadWorkspace() {
+  setReportOpen(matchMedia('(min-width: 701px)').matches)
+  const embedded = document.getElementById('embedded-case')
+  if (!embedded?.textContent) {
+    openCase(demo)
+    const saved = await loadCase().catch(() => undefined)
+    if (saved && !openedByUser) openCase(saved)
+    return
+  }
+  try {
+    const payload = JSON.parse(embedded.textContent)
+    const report = importLocalReport(payload.report)
+    const imported = importCase(payload.graph, report.chapters)
+    imported.reportSources = report.sources
+    embedded.remove()
+    const saved = await loadCase().catch(() => undefined)
+    if (!openedByUser) openCase(saved?.id === imported.id && saved.viewColumns ? saved : imported)
+  } catch (error) {
+    openCase(demo)
+    void queue.then(() => status(error instanceof Error ? error.message : String(error)))
+  }
+}
+void loadWorkspace()
 
 export function canvasCoordinates(id: string): Point | undefined {
   const point = drawing.positions[id] ?? drawing.routes[id]?.label
@@ -1079,4 +1209,4 @@ function inspectDrawing() {
   }
 }
 
-if (import.meta.env.DEV) Object.assign(window, { flowCanvas: { canvasCoordinates, inspectDrawing, renderedSnapshot: () => renderedSnapshot(graph, view, value('scope')) } })
+if (import.meta.env.DEV) Object.assign(window, { flowCanvas: { canvasCoordinates, inspectDrawing, renderedSnapshot: () => renderedSnapshot(graph, view, activeScope()) } })
