@@ -10,7 +10,8 @@ import { importLocalReport } from './report-import'
 import { loadCase, saveCase } from './storage'
 import { demo } from './demo'
 import { layout, layoutSettings, LAYOUT_LIMITS, NODE_HEIGHT, NODE_WIDTH } from './layout'
-import { graphData, makeGraph, renderedSnapshot, type EdgeLabels, type Selection } from './renderer'
+import { graphData, makeGraph, renderedSnapshot, type Selection } from './renderer'
+import { validateDrawing } from './layout-validation'
 import { addressAccent, addressIcon } from './address-icons'
 import { nodeAssets } from './node-summary'
 import './style.css'
@@ -47,8 +48,6 @@ app.innerHTML = `
         <aside id="scope-panel" aria-label="Network scope" hidden>
           <h2>Network scope</h2><div id="scope-options"></div>
           <label class="context-check"><input id="include-context" type="checkbox" checked>Include historical &amp; comparison activity</label>
-          <label for="edge-labels">Transaction labels</label>
-          <select id="edge-labels"><option value="auto">Automatic</option><option value="on">Show amount and count</option><option value="off">Hide</option></select>
           <details id="role-legend" open><summary>Address roles</summary><ul id="scope-legend"></ul></details>
         </aside>
         <div id="stage">
@@ -58,6 +57,7 @@ app.innerHTML = `
           <label>Row gap <input type="number" name="rowGap" required></label>
           <label>Column gap <input type="number" name="columnGap" required></label>
           <label>Max nodes per column <input type="number" name="maxRows" required></label>
+          <output id="layout-validation" class="subtle"></output>
           <div class="actions"><button class="primary">Apply layout</button><button id="layout-reset" type="button">Default</button></div>
         </form>
         <section id="layers-panel" class="canvas-popover stack" aria-label="Canvas layers" hidden>
@@ -101,7 +101,6 @@ let layerTransaction: string | undefined
 let editingNode: string | undefined
 let marquee: { pointer: number; start: Point } | undefined
 let filters: Filters = {}
-let edgeLabels: EdgeLabels = 'auto'
 let hidden = new Set<string>()
 let grouped = false
 let revealed: string | undefined
@@ -109,6 +108,7 @@ let page = 0
 let history = History.restore(readEdits(demo.id))
 let view = project(data, history.value)
 let drawing = layout(view)
+let layoutValidation = validateDrawing(view, drawing)
 let assetsByNode = nodeAssets(data, view)
 let queue: Promise<void> = Promise.resolve()
 let draftEditor: Draft | undefined
@@ -229,9 +229,14 @@ function render(fit = false, focus?: string, refreshInspector = true): Promise<v
     resizeGraph()
     drawing = layout(view, keepPositions ? { ...drawing.positions, ...history.value.positions } : history.value.positions,
       history.value.bends, keepPositions ? drawing : undefined, history.value.layout, !!filters.pair)
+    layoutValidation = validateDrawing(view, drawing)
+    const { transactions, summaries, missing, invalidAnchors, blockedRoutes, overlappingSummaries, detours } = layoutValidation
+    const issues = missing.length + invalidAnchors.length + blockedRoutes.length + overlappingSummaries.length
+    $('layout-validation').textContent = `${summaries}/${transactions} transaction summaries · ${issues} layout issues` +
+      (detours.length ? ` · ${detours.length} extended routes` : '')
     keepPositions = false
     assetsByNode = nodeAssets(data, view, filters.to)
-    graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection, edgeLabels, boxed, !!filters.pair))
+    graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection, boxed, !!filters.pair))
     await graph.render()
     if (beforeResize && anchor) {
       const [x, y] = graph.getClientByCanvas(anchor)
@@ -275,7 +280,6 @@ function openCase(next: CaseData) {
   setBoxMode(false)
   $<HTMLDialogElement>('node-editor').close()
   filters = { core: !!(next.core ?? next.views?.core) }
-  edgeLabels = 'auto'
   grouped = false
   hidden = new Set()
   revealed = undefined
@@ -315,7 +319,6 @@ function syncScopes() {
     button.setAttribute('aria-pressed', String(button.dataset.scope === activeScope()))
   }
   $<HTMLInputElement>('include-context').checked = filters.includeContext !== false
-  $<HTMLSelectElement>('edge-labels').value = edgeLabels
 }
 
 function setScopesOpen(open: boolean) {
@@ -819,7 +822,6 @@ $('scope-options').onclick = event => {
   applyFilters()
 }
 $('scopes-toggle').onclick = () => setScopesOpen($('scope-panel').hidden)
-$('edge-labels').onchange = () => { edgeLabels = value('edge-labels') as EdgeLabels; void render() }
 $('reset').onclick = () => {
   for (const id of ['asset', 'from', 'to', 'search', 'address-filter']) $<HTMLInputElement>(id).value = ''
   $('results').hidden = true
@@ -1360,6 +1362,7 @@ Object.assign(window, {
     collect: collectInvestigation,
     stop_collection: () => investigation?.abort(),
     get_selection: getAgentContext,
+    get_layout_validation: () => structuredClone(layoutValidation),
     get_layers: () => structuredClone({ layers: history.value.layers ?? [], showUnassigned: history.value.showUnassigned !== false, soloLayer }),
     edit_layer: changeLayer,
     set_layout: applyCanvasLayout,
@@ -1374,7 +1377,6 @@ Object.assign(window, {
       agentHandler = handler
     },
     set_view: async (input?: string | { ref?: string; filters?: Filters; grouped?: boolean;
-      edgeLabels?: EdgeLabels;
       branch?: { id: string; direction: 'in' | 'out'; collapsed: boolean }; fit?: boolean; zoom?: number; pan?: Point; clearSelection?: boolean }) => {
       const ref = typeof input === 'string' ? input : input?.ref
       if (input && typeof input === 'object') {
@@ -1386,10 +1388,6 @@ Object.assign(window, {
           $<HTMLInputElement>('to').value = filters.to?.slice(0, 10) ?? ''
           syncScopes()
           revealed = undefined
-        }
-        if (input.edgeLabels) {
-          edgeLabels = input.edgeLabels
-          syncScopes()
         }
         if (input.grouped !== undefined) {
           if (grouped !== input.grouped && !input.filters) delete filters.pair
@@ -1415,7 +1413,7 @@ Object.assign(window, {
       if (ref) await locate(ref)
       return { caseId: data.id, revision: data.analysis?.revision ?? 0, selection: selection && { ...selection }, filters: { ...filters },
         selectedNodes: [...boxed], layout: layoutSettings(history.value.layout), soloLayer,
-        visibleNodes: view.nodes.length, visibleTransfers: view.count, grouped, edgeLabels, zoom: graph.getZoom() }
+        visibleNodes: view.nodes.length, visibleTransfers: view.count, grouped, edgeLabels: 'on', zoom: graph.getZoom() }
     },
     edit_canvas: (command: CanvasCommand) => {
       if (command.action === 'undo' || command.action === 'redo') {

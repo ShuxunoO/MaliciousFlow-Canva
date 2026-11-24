@@ -116,7 +116,6 @@ button.primary { background: #95b3ff; color: #101b35; font-weight: 650; }
 #scope-options button[aria-pressed="true"] { border-color: #7598e7; color: #d9e5ff; }
 .context-check { display: flex; align-items: flex-start; margin: 16px 0 12px; line-height: 1.4; cursor: pointer; }
 .context-check input { accent-color: var(--accent); margin: 2px 2px 0 0; }
-#edge-labels { width: 100%; margin: 5px 0 13px; font-size: 12px; }
 #role-legend, #selection summary { color: var(--accent); font-size: 12px; cursor: pointer; }
 #scope-legend { display: grid; gap: 6px; list-style: none; padding: 0; margin: 9px 0 0; color: var(--muted); font-size: 11px; }
 #scope-legend li { display: flex; align-items: center; gap: 6px; }

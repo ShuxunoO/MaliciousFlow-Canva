@@ -26,7 +26,7 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
     expect(snapshot.nodes.every((node: { box?: number[] }) => node.box?.every(Number.isFinite))).toBe(true)
     expect(snapshot.nodes.every((node: { hasIcon: boolean }) => node.hasIcon)).toBe(true)
     expect(snapshot.edges.every((edge: { points: unknown[] }) => edge.points.length >= 2)).toBe(true)
-    if (view === 'return') expect(snapshot.labels.length).toBeGreaterThan(0)
+    expect(snapshot.labels.length).toBe(snapshot.edges.length)
     writeFileSync(test.info().outputPath(view + '.geometry.json'), JSON.stringify(snapshot))
     const expectedEvents = new Set<number>(original.views[view].edges.flatMap(
       (edge: { data: { events: number[] } }) => edge.data.events))
@@ -104,10 +104,6 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
   }
   await scopes.getByRole('button', { name: /Public return flow/ }).click()
   await expect(page.locator('#status')).toContainText('6 transfers')
-  await page.getByLabel('Transaction labels').selectOption('off')
-  await expect.poll(() => page.evaluate(() => (window as any).flowCanvas.renderedSnapshot().labels.length)).toBe(0)
-  await page.getByLabel('Transaction labels').selectOption('on')
-  await expect.poll(() => page.evaluate(() => (window as any).flowCanvas.renderedSnapshot().labels.length)).toBeGreaterThan(0)
   await page.getByLabel('Include historical & comparison activity').uncheck()
   await expect(page.locator('#status')).toContainText('6 transfers')
   await scopes.getByRole('button', { name: /Core paths/ }).click()
@@ -120,13 +116,17 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
   }).length
   await expect(page.locator('#status')).toContainText(coreCount.toLocaleString('en-US') + ' transfers')
   await page.getByLabel('Include historical & comparison activity').check()
-  await page.getByLabel('Transaction labels').selectOption('auto')
   const allStarted = performance.now()
   await scopes.getByRole('button', { name: /Full network/ }).click()
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '1748', { timeout: 45_000 })
   await expect(page.locator('#graph')).toHaveAttribute('data-edges', '2475')
   await expect(page.locator('#status')).toContainText('6,314 transfers')
   await savePainted('all', performance.now() - allStarted)
+  const validation = await page.evaluate(() => (window as any).maliciousFlow.get_layout_validation())
+  expect(validation).toMatchObject({
+    transactions: 2475, summaries: 2475, missing: [], invalidAnchors: [],
+    blockedRoutes: [], overlappingSummaries: [], detours: [],
+  })
   const compact = await page.evaluate(() => {
     const drawing = (window as any).flowCanvas.renderedSnapshot()
     const edges = drawing.edges.filter((edge: { source: string; target: string }) =>

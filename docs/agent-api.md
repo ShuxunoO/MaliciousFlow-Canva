@@ -9,6 +9,7 @@ The application exposes `window.maliciousFlow` to JavaScript running in the canv
 | `set_view()` | Optional reference string or view options | Resolves to the active case ID, analysis revision, selection, filters, grouping, visible counts and zoom level |
 | `get_selection()` | None | Returns the selected object or boxed nodes, their visible transfers, filter bounds, and single-node asset balances |
 | `set_layout(settings)` | Any subset of `{ rowGap, columnGap, maxRows }` | Saves the merged, normalized layout settings for the active case and returns them |
+| `get_layout_validation()` | None | Returns the latest in-app check of summary coverage, port anchors, routes through nodes, overlapping summaries and extended routes |
 | `get_layers()` | None | Returns layer names, visibility, stable member references, unassigned visibility and the current solo layer |
 | `edit_layer(command)` | Layer command described below | Applies a membership or visibility change. Creating a layer returns its ID |
 | `collect(seed, trace?)` | Ethereum address or transaction hash and optional `{ direction, hops }` | Queries the data provider, applies verified batches, then returns the data coverage statement and event references |
@@ -28,7 +29,7 @@ A reference can be an address ID, entity ID, graph edge ID, transaction event ID
 - `ref` locates a graph object or evidence record.
 - `filters` replaces the current filter object. It may include `address`, `asset`, `from`, `to`, `core`, `viewId` and `includeContext`. An address filter accepts an address or entity ID. `asset` uses the stable asset ID from the case, such as `1:native` for ETH. `from` is inclusive and `to` is exclusive. Set `includeContext: false` to hide transfers marked as historical or comparison activity.
 - For KuCoin, `viewId` accepts `all`, `core`, `original`, `return`, or `batch-D1` through `batch-D8`. Omit `viewId` to select the full network, or pass `core: true` to open the core view.
-- `edgeLabels` accepts `auto`, `on`, or `off` and is returned by `set_view`. Automatic mode shows persistent labels on smaller graphs. The on setting uses the available label positions from the router.
+- Transaction summaries are always displayed. `set_view()` reports `edgeLabels: "on"` for existing integrations.
 - `grouped` turns entity aggregation on or off. `branch` accepts `{ id, direction: 'in' | 'out', collapsed }`.
 - Set `filters.pair: [addressIdA, addressIdB]` to show transfers between two visible nodes in both directions. This filter combines with scope, asset, time, and layer visibility. Use graph entity IDs for nodes in the grouped view.
 - `fit` fits visible nodes to the canvas. `zoom` sets the zoom factor and `pan: [dx, dy]` translates the viewport.

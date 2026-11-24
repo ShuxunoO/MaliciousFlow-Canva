@@ -1,6 +1,7 @@
 import { BaseEdge, CanvasEvent, EdgeEvent, ExtensionCategory, Graph, NodeEvent, Rect, register } from '@antv/g6'
 import type { BaseEdgeStyleProps, GraphData, RectStyleProps } from '@antv/g6'
 import { flattenPath } from './geometry'
+import { SUMMARY_WIDTH, SUMMARY_HEIGHT, transactionSummary, type SummaryPosition } from './transaction-summaries'
 import { compactQuantity, type NodeAsset } from './node-summary'
 import type { Edits, FlowView, Point } from './case'
 import { NODE_HEIGHT, NODE_WIDTH, type Drawing, type Route } from './layout'
@@ -76,11 +77,17 @@ export class BaseFlowNode extends Rect {
 class AddressNode extends BaseFlowNode {}
 class EntityNode extends BaseFlowNode { protected glyph = '≋' }
 
-interface FlowStyle extends BaseEdgeStyleProps { route: Route }
+interface FlowStyle extends BaseEdgeStyleProps { route: Route; summary?: SummaryPosition }
 
 class TransactionEdge extends BaseEdge {
   render(...args: Parameters<BaseEdge['render']>) {
     super.render(...args)
+    const [attributes = this.attributes, container = this] = args
+    const summary = (attributes as FlowStyle).summary
+    this.upsert('summary-leader', 'path', summary?.callout ? {
+      d: [['M', ...summary.anchor], ['L', ...summary.point]], stroke: '#7e9db9',
+      opacity: .68, lineDash: [3, 3], lineWidth: 1, pointerEvents: 'none', zIndex: -1,
+    } : false, container)
     remember(this.context.graph, this)
   }
 
@@ -91,10 +98,10 @@ class TransactionEdge extends BaseEdge {
   protected getLabelStyle(attributes: Required<FlowStyle>) {
     const style = super.getLabelStyle(attributes)
     if (!style) return false
-    const [x, y] = attributes.route.label
-    const parallel = attributes.route.parallel
+    const [x, y] = attributes.summary?.point ?? attributes.route.label
     return { ...style, x, y, transform: [], textAlign: 'center' as const, textBaseline: 'middle' as const,
-      ...(parallel ? { wordWrap: true, wordWrapWidth: parallel.labelWidth - 8, maxLines: 1, textOverflow: 'ellipsis' } : {}) }
+      wordWrap: true, wordWrapWidth: SUMMARY_WIDTH - 12, maxLines: 1, textOverflow: 'ellipsis',
+      backgroundWidth: SUMMARY_WIDTH, backgroundHeight: SUMMARY_HEIGHT }
   }
 }
 
@@ -182,8 +189,6 @@ function truncate(text: string, length: number) {
   return chars.length > length ? chars.slice(0, length - 1).join('') + '…' : text
 }
 
-export type EdgeLabels = 'auto' | 'on' | 'off'
-
 const assetColors = new Map([
   ['ETH', '#84b1ff'], ['USDT', '#6ce3ca'], ['USDC', '#8ee3ff'], ['LINK', '#a4a5ff'], ['DAI', '#ffd078'],
 ])
@@ -198,8 +203,7 @@ function edgeColor(asset?: string, assetId = '') {
 }
 
 export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets: Map<string, NodeAsset[]>,
-  hidden: Set<string>, selected?: Selection, labels: EdgeLabels = 'auto', boxed = new Set<string>(), pairFocused = false): GraphData {
-  const showAllLabels = labels === 'on' || labels === 'auto' && view.edges.length < 190
+  hidden: Set<string>, selected?: Selection, boxed = new Set<string>(), pairFocused = false): GraphData {
   const primary = new Set(boxed)
   if (selected?.type === 'node') primary.add(selected.id)
   const relatedNodes = new Set(primary)
@@ -241,34 +245,19 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
     edges: view.edges.map(edge => {
       const route = drawing.routes[edge.id]
       const first = edge.events[0]
-      const last = edge.events.at(-1)
-      const time = first ? first.time.slice(0, first === last ? 19 : 10).replace('T', ' ') : ''
-      const period = first !== last && last ? time + ' → ' + last.time.slice(0, 10) : time
       const color = edgeColor(edge.asset, first?.assetId)
       const related = relatedEdges.has(edge.id)
       const parallel = route.parallel
-      const showLabel = selected?.id === edge.id || drawing.labels.has(edge.id) && (showAllLabels || !!parallel)
-      const compactPeriod = !first || !last || first === last ? time.slice(5)
-        : first.time.slice(0, 10) === last.time.slice(0, 10)
-          ? first.time.slice(5, 16).replace('T', ' ') + '→' + last.time.slice(11, 16)
-          : first.time.slice(0, 10) + '–' + last.time.slice(5, 10)
-      const amount = edge.amount ?? ''
-      const label = first ? (parallel
-        ? [compactPeriod, (amount.length <= 10 ? amount : compactQuantity([amount])) + ' ' + edge.asset,
-          ...(edge.events.length > 1 ? ['×' + edge.events.length] : [])].join(' · ')
-        : [period + ' UTC', amount + ' ' + edge.asset,
-          ...(edge.events.length > 1 ? [edge.events.length + ' transfers'] : [])].join('  · ')
-          + (edits.notes[edge.id] ? '  ·  ' + truncate(edits.notes[edge.id], 24) : ''))
-        : edits.notes[edge.id] ?? edge.note
+      const summary = drawing.summaries[edge.id]
       return {
         id: edge.id, type: 'transaction-path', source: edge.source, target: edge.target,
         states: selected?.id === edge.id ? ['selected'] : related ? ['related'] : [],
         style: {
-          route, loop: false, stroke: color, opacity: focusing && !related ? .19 : 1,
+          route, summary, loop: false, stroke: color, opacity: focusing && !related ? .19 : 1,
           lineWidth: parallel ? 1.45 : 1.55, increasedLineWidthForHitTesting: parallel?.compact ? 3 : parallel ? 5 : 9,
           lineDash: edge.events.length ? undefined : [6, 5], endArrow: true, endArrowType: 'triangle',
           endArrowFill: color, endArrowSize: parallel ? 6 : 10, cursor: 'pointer', labelAutoRotate: false,
-          labelText: labels !== 'off' && showLabel ? label : undefined,
+          labelText: first ? transactionSummary(edge) : undefined,
           labelFontSize: 10, labelFill: '#d7e5ef', labelBackground: true, labelBackgroundFill: '#111d26',
           labelPadding: [3, 4], labelBackgroundRadius: 3,
         },

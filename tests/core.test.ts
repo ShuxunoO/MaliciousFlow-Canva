@@ -105,7 +105,7 @@ describe('layout', () => {
     const drawing = layout(view, fixed)
     const trackYs = edges.map(edge => drawing.routes[edge.id].handle[1])
     expect(trackYs.slice(1).every((y, index) => y - trackYs[index] >= 34)).toBe(true)
-    expect(drawing.labels.size).toBe(20)
+    expect(Object.keys(drawing.summaries)).toHaveLength(20)
     for (const edge of edges) {
       const route = drawing.routes[edge.id]
       expect(route.blocked).toBe(false)
@@ -128,8 +128,8 @@ describe('layout', () => {
     const overviewTracks = edges.map(edge => overview.routes[edge.id].handle[1])
     expect(new Set(overviewTracks).size).toBe(60)
     expect(Math.max(...overviewTracks) - Math.min(...overviewTracks)).toBe(59 * 7)
-    expect(overview.labels.size).toBe(0)
-    expect(detail.labels.size).toBe(60)
+    expect(Object.keys(overview.summaries)).toHaveLength(60)
+    expect(Object.keys(detail.summaries)).toHaveLength(60)
     expect(detail.routes['asset-59'].handle[1] - detail.routes['asset-0'].handle[1]).toBe(59 * 34)
   })
 })

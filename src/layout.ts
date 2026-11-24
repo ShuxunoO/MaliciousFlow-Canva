@@ -1,5 +1,7 @@
 import type { FlowView, LayoutSettings, Point } from './case'
 import { parallelPath, parallelTracks } from './parallel-routing'
+import { placeSummaries, type SummaryPosition } from './transaction-summaries'
+import { BoxIndex, centeredBox, type Box } from './spatial'
 
 export const NODE_WIDTH = 320
 export const NODE_HEIGHT = 128
@@ -21,8 +23,8 @@ const clearance = 10
 
 export type PathCommand = ['M' | 'L', number, number] | ['Q', number, number, number, number]
 export interface Route { points: Point[]; label: Point; handle: Point; handleAxis: 'x' | 'y'; offset: number; path: [['M', number, number], ...PathCommand[]]; blocked: boolean;
-  parallel?: { labelWidth: number; compact: boolean } }
-export interface Drawing { positions: Record<string, Point>; routes: Record<string, Route>; labels: Set<string> }
+  parallel?: { compact: boolean } }
+export interface Drawing { positions: Record<string, Point>; routes: Record<string, Route>; summaries: Record<string, SummaryPosition> }
 
 export function rounded(points: Point[], radius = 24): Route['path'] {
   const path: Route['path'] = [['M', ...points[0]]]
@@ -64,7 +66,6 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
   const pitch = NODE_WIDTH + columnGap
   const positions: Record<string, Point> = Object.create(null)
   const routes: Record<string, Route> = Object.create(null)
-  const labels = new Set<string>()
   const incoming = new Map<string, number>()
   const connections = new Map<string, string[]>()
   const first = new Map<string, number>()
@@ -112,6 +113,8 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
     Math.min(p[0], q[0]) < center[0] + x && Math.max(p[0], q[0]) > center[0] - x
     && Math.min(p[1], q[1]) < center[1] + y && Math.max(p[1], q[1]) > center[1] - y
   let columnIndex = 0
+  const plannedColumns = new Map<string, number>()
+  const plannedRows = new Map<string, number>()
   for (const [, column] of [...columns].sort(([a], [b]) => a - b)) {
     column.sort((a, b) => (first.get(a) ?? Infinity) - (first.get(b) ?? Infinity) || a.localeCompare(b))
     const lanes = Math.ceil(column.length / maxRows)
@@ -119,13 +122,27 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
     const slot = (index: number) => index + Math.floor(index / 8)
     const center = Math.floor(slot(rows - 1) / 2)
     for (const [index, id] of column.entries()) {
-      if (positions[id]) continue
-      const point: Point = [(columnIndex + Math.floor(index / rows)) * pitch, (slot(index % rows) - center) * row]
-      while (occupied.some(other => hits(point, point, other, NODE_WIDTH + clearance, NODE_HEIGHT + clearance))) point[1] += row
-      positions[id] = point
-      occupied.push(point)
+      plannedColumns.set(id, columnIndex + Math.floor(index / rows))
+      plannedRows.set(id, (slot(index % rows) - center) * row)
     }
     columnIndex += lanes
+  }
+  const adjacent = new Map<number, number>()
+  for (const { source, target } of view.edges) {
+    const left = plannedColumns.get(source)!
+    if (plannedColumns.get(target) === left + 1) adjacent.set(left, (adjacent.get(left) ?? 0) + 1)
+  }
+  const columnX = [0]
+  for (let index = 0; index < columnIndex; index++) {
+    const gap = !parallelDetail && (adjacent.get(index) ?? 0) > 32 ? Math.max(pitch, NODE_WIDTH + 1060) : pitch
+    columnX.push(columnX[index] + gap)
+  }
+  for (const [id, column] of plannedColumns) {
+    if (positions[id]) continue
+    const point: Point = [columnX[column], plannedRows.get(id)!]
+    while (occupied.some(other => hits(point, point, other, NODE_WIDTH + clearance, NODE_HEIGHT + clearance))) point[1] += row
+    positions[id] = point
+    occupied.push(point)
   }
   const maxY = occupied.reduce((max, point) => Math.max(max, point[1]), 0)
   const minY = occupied.reduce((min, point) => Math.min(min, point[1]), 0)
@@ -150,11 +167,31 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
     positions[edgeById.get(a)!.source][1] - positions[edgeById.get(b)!.source][1] ||
     edgeById.get(a)!.source.localeCompare(edgeById.get(b)!.source) || chronological(edgeById.get(a)!, edgeById.get(b)!))
   const portOffset = (ids: string[], id: string) => ids.length < 2 ? 0 : (ids.indexOf(id) / (ids.length - 1) - .5) * 64
-  const labelBoxes: { point: Point; halfWidth: number }[] = []
   const horizontalUse = new Map<number, number>()
   const parallelRails: { y: number; left: number; right: number; gap: number }[] = []
   const laneDistance = (ids: string[], id: string) => 32 + (ids.indexOf(id) / Math.max(1, ids.length - 1)) * 96
-  const blocked = (p: Point, q: Point) => occupied.some(point => hits(p, q, point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
+  const obstacles = new BoxIndex<Box & { center: Point }>()
+  for (const center of occupied) obstacles.add({
+    ...centeredBox(center, NODE_WIDTH + clearance * 2, NODE_HEIGHT + clearance * 2), center,
+  })
+  const blocked = (p: Point, q: Point, exclude?: Point, second?: Point) => obstacles.some({
+    left: Math.min(p[0], q[0]), right: Math.max(p[0], q[0]),
+    top: Math.min(p[1], q[1]), bottom: Math.max(p[1], q[1]),
+  }, obstacle => obstacle.center !== exclude && obstacle.center !== second)
+  const nearbyChannels = (a: number, b: number, offset = 0) => {
+    const low = Math.min(a, b) + offset
+    const high = Math.max(a, b) + offset
+    const middle = (low + high) / 2
+    const spacing = Math.max(1, Math.ceil((high - low) / (row * 14)))
+    const result = [middle, low, high]
+    for (let y = (Math.floor((low - row) / row) + .5) * row; y <= high + row; y += row * spacing) {
+      result.push(y, y - 12, y + 12, y - 24, y + 24)
+    }
+    return result.sort((left, right) => {
+      const detour = (y: number) => Math.max(0, low - y, y - high)
+      return detour(left) - detour(right) || Math.abs(left - middle) - Math.abs(right - middle)
+    })
+  }
   for (const edge of [...edges.filter(item => tracks.has(item.id)), ...edges.filter(item => !tracks.has(item.id))]) {
     const start = positions[edge.source]
     const end = positions[edge.target]
@@ -167,12 +204,11 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
     const simple: Point[] = [exit, [bend, exit[1]], [bend, entry[1]], entry]
     const avoids = (points: Point[]) => {
       if (points.length === 2) {
-        return !occupied.some(point => point !== start && point !== end
-          && hits(points[0], points[1], point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
+        return !blocked(points[0], points[1], start, end)
       }
       return points.slice(2, -1).every((point, index) => !blocked(points[index + 1], point))
-        && !occupied.some(point => point !== start && hits(points[0], points[1], point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
-        && !occupied.some(point => point !== end && hits(points.at(-2)!, points.at(-1)!, point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
+        && !blocked(points[0], points[1], start)
+        && !blocked(points.at(-2)!, points.at(-1)!, end)
     }
     const manualOffset = bends[edge.id] ?? 0
     const parallel = tracks.get(edge.id)
@@ -184,13 +220,28 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
       for (let slot = 1; slot <= Math.ceil(row * 2 / parallel.gap); slot++) {
         base.push(expected - slot * parallel.gap, expected + slot * parallel.gap)
       }
+      const long = Math.abs(plannedColumns.get(edge.source)! - plannedColumns.get(edge.target)!) > 1
+      if (long) {
+        const nearby = nearbyChannels(exit[1], entry[1], manualOffset)
+        base.unshift(...nearby.flatMap(y => [y, y - parallel.gap, y + parallel.gap]))
+      }
       const extern = NODE_HEIGHT / 2 + 28
       const above = Math.min(expected, minY - extern)
       const below = Math.max(expected, maxY + extern)
       for (let slot = 0; slot < parallel.count + 2; slot++) {
         base.push(above - slot * parallel.gap, below + slot * parallel.gap)
       }
-      for (const y of base) {
+      const detour = (y: number) => Math.max(0, Math.min(exit[1], entry[1]) - y, y - Math.max(exit[1], entry[1]))
+      const near = [...new Set(base)].filter(y => detour(y) <= 900 || !!manualOffset || parallelDetail)
+      const rest = [...new Set(base)].filter(y => !near.includes(y))
+      const localCandidates = long && !manualOffset ? nearbyChannels(exit[1], entry[1])
+        .flatMap(y => [y, y - 2, y + 2, y - 4, y + 4]) : []
+      const candidates = [
+        ...near.map(y => ({ y, spacing: long ? 7 : parallel.gap })),
+        ...localCandidates.map(y => ({ y, spacing: 2 })),
+        ...rest.map(y => ({ y, spacing: parallel.gap })),
+      ]
+      for (const { y, spacing } of candidates) {
         const forward: [Point, Point, Point, Point, Point, Point] = [exit,
           [exit[0] + 18, exit[1]], [exit[0] + inset, y], [entry[0] - inset, y],
           [entry[0] - 18, entry[1]], entry]
@@ -199,21 +250,14 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
         const left = Math.min(lane[2][0], lane[3][0])
         const right = Math.max(lane[2][0], lane[3][0])
         if ((!smooth && !avoids(lane)) || parallelRails.some(rail =>
-          rail.left < right && rail.right > left && Math.abs(y - rail.y) < Math.max(rail.gap, parallel.gap) - .01)) continue
+          rail.left < right && rail.right > left && Math.abs(y - rail.y) < Math.min(spacing, rail.gap) - .01)) continue
         const center: Point = [(left + right) / 2, y]
         const label: Point = [center[0], y - 12]
-        const labelWidth = Math.min(280, right - left - (smooth ? 12 : 50))
-        if (!parallel.compact && labelWidth >= 76 && !occupied.some(other =>
-          hits(label, label, other, NODE_WIDTH / 2 + labelWidth / 2, NODE_HEIGHT / 2 + 11)) &&
-          !labelBoxes.some(other => hits(label, label, other.point, labelWidth / 2 + other.halfWidth + 4, 22))) {
-          labelBoxes.push({ point: label, halfWidth: labelWidth / 2 })
-          labels.add(edge.id)
-        }
         const points = compact(lane)
         routes[edge.id] = { points, label, handle: center, handleAxis: 'y', offset: manualOffset,
           path: smooth ? parallelPath(forward) : rounded(points), blocked: false,
-          parallel: { labelWidth: Math.max(76, labelWidth), compact: parallel.compact } }
-        parallelRails.push({ y, left, right, gap: parallel.gap })
+          parallel: { compact: parallel.compact } }
+        parallelRails.push({ y, left, right, gap: spacing })
         horizontalUse.set(y, (horizontalUse.get(y) ?? 0) + 1)
         break
       }
@@ -240,9 +284,10 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
       }).flat()
       if (flat && direct && manualOffset) local.unshift(exit[1])
       const offset = manualOffset
-      const channels = [...new Set([...local, ...perimeter])].sort((a, b) => {
-        const cost = (lane: number) => Math.abs(exit[1] - lane - offset) + Math.abs(entry[1] - lane - offset)
-          + (horizontalUse.get(lane + offset) ?? 0) * 180
+      const channels = [...new Set([...local, ...nearbyChannels(exit[1], entry[1]), ...perimeter])].sort((a, b) => {
+        const cost = (lane: number) => 3 * Math.max(0, Math.min(exit[1], entry[1]) - lane, lane - Math.max(exit[1], entry[1]))
+          + Math.abs(exit[1] + entry[1] - lane * 2) * .12
+          + (horizontalUse.get(lane + offset) ?? 0) * 5
         return cost(a) - cost(b)
       })
       for (const base of channels) {
@@ -265,22 +310,12 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
       .sort((a, b) => Math.abs(b.end[0] - b.start[0]) - Math.abs(a.end[0] - a.start[0]))
     const placeAbove = (segment: { start: Point; end: Point }): Point =>
       [(segment.start[0] + segment.end[0]) / 2, segment.start[1] - 13]
-    const halfWidth = 145 + Math.max(0, (edge.amount?.length ?? 0) - 12) * 4
-    const segment = horizontal.find(candidate => {
-      if (Math.abs(candidate.start[0] - candidate.end[0]) < halfWidth * 1.5) return false
-      const point = placeAbove(candidate)
-      return !labelBoxes.some(other => hits(point, point, other.point, halfWidth + other.halfWidth + 4, 22))
-        && !occupied.some(other => hits(point, point, other, NODE_WIDTH / 2 + halfWidth, NODE_HEIGHT / 2 + 11))
-    })
-    const fallbackSegment = segment ?? horizontal[0]
+    const fallbackSegment = horizontal[0]
     const label: Point = fallbackSegment ? placeAbove(fallbackSegment) : [start[0], start[1] - 13]
-    if (segment) {
-      labelBoxes.push({ point: label, halfWidth: Math.max(180, halfWidth) })
-      labels.add(edge.id)
-    }
     const handle: Point = retained?.handle ?? (selected === simple ? [bend, (exit[1] + entry[1]) / 2] : [(startLane + endLane) / 2, obstruction ? fallbackY : track])
     routes[edge.id] = { points, label, handle, handleAxis: retained?.handleAxis ?? (selected === simple && !flat ? 'x' : 'y'),
       offset: manualOffset, path: rounded(points), blocked: obstruction }
   }
-  return { positions, routes, labels }
+  const summaries = placeSummaries(view, routes, occupied.map(point => centeredBox(point, NODE_WIDTH, NODE_HEIGHT)))
+  return { positions, routes, summaries }
 }
