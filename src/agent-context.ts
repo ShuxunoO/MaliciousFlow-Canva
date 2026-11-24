@@ -7,6 +7,7 @@ export interface AgentContext {
   caseId: string
   selection?: { type: 'node' | 'edge'; id: string }
   node?: FlowNode
+  selectedNodes?: FlowNode[]
   filters: Filters
   transfers: Transfer[]
   assets: NodeAsset[]
@@ -18,7 +19,8 @@ export type AgentHandler = (request: { question: string; context: AgentContext; 
 export function answerQuestion(question: string, context: AgentContext): AgentReply {
   const transfers = context.transfers
   const refs = transfers.slice(0, 30).map(item => item.evidence ?? item.id)
-  const subject = context.node?.name ?? (context.selection?.type === 'edge' ? 'Selected edge' : 'Visible canvas')
+  const subject = context.node?.name ?? (context.selection?.type === 'edge' ? 'Selected edge'
+    : context.selectedNodes?.length ? context.selectedNodes.length + ' selected nodes' : 'Visible canvas')
   if (/\b(balance|snapshot|usd|valuation)\b/i.test(question)) {
     if (context.node) {
       const balances = context.assets.filter(asset => asset.balances.length)

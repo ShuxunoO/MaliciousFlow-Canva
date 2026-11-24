@@ -1,4 +1,72 @@
 import { expect, test } from '@playwright/test'
+import { NODE_WIDTH } from '../../src/layout'
+
+test('edits a node from its card and highlights only its direct neighborhood', async ({ page }) => {
+  await page.goto('/')
+  const graph = page.locator('#graph')
+  await expect(graph).toHaveAttribute('data-nodes', '5')
+  const point = await page.evaluate(() => (window as any).flowCanvas.nodeActionPoint('alpha', [125, -40]))
+  await page.mouse.click(...point as [number, number])
+  const editor = page.getByRole('dialog', { name: 'Edit node' })
+  await expect(editor).toBeVisible()
+  await editor.getByLabel('Display name').fill('Reviewed recipient')
+  await editor.getByLabel('Note', { exact: true }).fill('Verified manually with a long remark that must stay inside the left section of the card.')
+  await editor.getByRole('button', { name: 'Save node' }).click()
+  await expect(editor).toBeHidden()
+  await page.evaluate(() => (window as any).maliciousFlow.set_view('alpha'))
+  await expect(page.getByRole('heading', { name: 'Reviewed recipient' })).toBeVisible()
+  const observed = await page.evaluate(() => ({
+    drawn: (window as any).flowCanvas.inspectDrawing(),
+    card: (window as any).flowCanvas.renderedSnapshot().nodes.find((node: { id: string }) => node.id === 'alpha'),
+  }))
+  expect(observed.drawn.nodes.find((node: { id: string }) => node.id === 'relay').states).toEqual(['related'])
+  expect(observed.drawn.nodes.find((node: { id: string }) => node.id === 'beta').states).toEqual([])
+  expect(observed.drawn.edges.filter((edge: { states: string[] }) => edge.states.includes('related'))).toHaveLength(1)
+  const { note, ledger, address, addressText } = observed.card.card
+  expect(note[0] + note[2]).toBeLessThan(ledger[0])
+  expect(address[1]).toBeGreaterThan(ledger[1] + ledger[3])
+  expect(addressText).toBe('0x2da6c30000000000000000000000000000000003')
+  await expect(page.getByLabel('Node note')).toHaveValue(/Verified manually/)
+})
+
+test('boxes nodes, creates a layer with their transfers, and saves spacing per case', async ({ page }) => {
+  await page.goto('/')
+  const graph = page.locator('#graph')
+  await expect(graph).toHaveAttribute('data-nodes', '5')
+  await page.getByRole('button', { name: 'Box select' }).click()
+  const bounds = await page.evaluate(() => {
+    const graph = (window as any).flowCanvas
+    const [x1, y1] = graph.canvasCoordinates('origin')
+    const [x2, y2] = graph.canvasCoordinates('relay')
+    return [Math.min(x1, x2) - 5, Math.min(y1, y2) - 10, Math.max(x1, x2) + 5, Math.max(y1, y2) + 10]
+  })
+  await page.mouse.move(bounds[0], bounds[1])
+  await page.mouse.down()
+  await page.mouse.move(bounds[2], bounds[3], { steps: 5 })
+  await page.mouse.up()
+  await expect(page.getByRole('heading', { name: '2 selected nodes' })).toBeVisible()
+  await page.getByRole('button', { name: 'Add selection to layer' }).click()
+  await page.getByLabel('Layer name', { exact: true }).fill('Origin flow')
+  await page.getByRole('button', { name: 'New layer from selection' }).click()
+  await expect(page.getByText('4 items')).toBeVisible()
+  await page.getByRole('button', { name: 'Solo', exact: true }).click()
+  await expect(page.locator('#status')).toContainText('2 nodes · 1 edge · 2 transfers')
+  await page.getByRole('button', { name: 'Solo', exact: true }).click()
+  await expect(graph).toHaveAttribute('data-nodes', '5')
+  await page.getByRole('checkbox', { name: 'Show layer Origin flow' }).uncheck()
+  await expect(page.locator('#status')).toContainText('4 transfers')
+  await page.getByRole('button', { name: 'Layout', exact: true }).click()
+  await page.getByLabel('Column gap').fill('500')
+  await page.getByLabel('Row gap').fill('125')
+  await page.getByLabel('Max nodes per column').fill('2')
+  await page.getByRole('button', { name: 'Apply layout' }).click()
+  await page.reload()
+  await expect(page.locator('#status')).toContainText('4 transfers')
+  await page.getByRole('button', { name: 'Layout', exact: true }).click()
+  await expect(page.getByLabel('Column gap')).toHaveValue('500')
+  await expect(page.getByLabel('Row gap')).toHaveValue('125')
+  await expect(page.getByLabel('Max nodes per column')).toHaveValue('2')
+})
 
 test('selects and drags a node, edits its note, and restores the edit', async ({ page }) => {
   const errors: string[] = []
@@ -83,11 +151,8 @@ test('filters by address, explores node balances and connects two nodes', async 
 test('toggles the branch from the node card and preserves its position', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '5')
-  const port = await page.evaluate(async () => {
-    const state = await (window as any).maliciousFlow.set_view()
-    const [x, y] = (window as any).flowCanvas.canvasCoordinates('relay')
-    return [x + 112 * state.zoom, y] as [number, number]
-  })
+  const port = await page.evaluate(width =>
+    (window as any).flowCanvas.nodeActionPoint('relay', [width / 2, 0]) as [number, number], NODE_WIDTH)
   await page.mouse.click(...port)
   await expect(page.locator('#status')).toContainText('3 transfers')
   await expect(page.getByRole('button', { name: 'Expand outflow' })).toBeVisible()

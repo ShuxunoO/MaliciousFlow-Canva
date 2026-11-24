@@ -6,7 +6,7 @@ export function flattenPath(path: PathCommand[], tolerance = 0.5): Point[] {
   const points: Point[] = []
   const add = (point: Point) => {
     const last = points.at(-1)
-    if (!last || last[0] !== point[0] || last[1] !== point[1]) points.push(point)
+    if (!last || Math.hypot(last[0] - point[0], last[1] - point[1]) > 1e-8) points.push(point)
   }
   const midpoint = (a: Point, b: Point): Point => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
   const split = (start: Point, control: Point, end: Point) => {

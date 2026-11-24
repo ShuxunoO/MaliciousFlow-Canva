@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { emptyEdits, History, latestBalances, project, sumDecimal, transact } from '../src/case'
 import { demo } from '../src/demo'
-import { layout, NODE_WIDTH } from '../src/layout'
+import { layout, layoutSettings, NODE_WIDTH, NODE_HEIGHT } from '../src/layout'
 
 describe('case', () => {
   it('adds decimal strings without floating point conversion', () => {
@@ -43,6 +43,19 @@ describe('case', () => {
     expect(latestBalances(demo, ['relay'], '2020-09-27')).toEqual([])
     expect(latestBalances(demo, ['relay'])[0].usd).toBe('6800')
   })
+
+  it('applies layers before aggregation and keeps the endpoints of visible and revealed events', () => {
+    const edits = emptyEdits()
+    edits.layers = [{ id: 'focus', name: 'Focus', visible: false, refs: ['relay', 'demo-0'] }]
+    const hidden = project(demo, edits)
+    expect(hidden.count).toBe(5)
+    expect(hidden.edges.find(edge => edge.source === 'origin' && edge.target === 'relay')?.amount).toBe('6.25')
+    expect(hidden.nodes.some(node => node.id === 'relay')).toBe(true)
+    const solo = project(demo, edits, {}, false, undefined, undefined, 'focus')
+    expect(solo.edges.map(edge => edge.amount)).toEqual(['18.5'])
+    expect(solo.nodes.map(node => node.id).sort()).toEqual(['origin', 'relay'])
+    expect(project(demo, edits, {}, false, undefined, 'D-1').count).toBe(6)
+  })
 })
 
 describe('layout', () => {
@@ -66,6 +79,19 @@ describe('layout', () => {
     const drawing = layout(view, { relay: [520, 500] })
     expect(drawing.positions.relay).toEqual([520, 500])
     expect(drawing.routes[edge.id].points).not.toEqual(drawing.routes.parallel.points)
+  })
+
+  it('splits dense ranks, leaves routing gaps and applies both spacing controls', () => {
+    const nodes = Array.from({ length: 20 }, (_, index) => ({
+      id: String(index).padStart(2, '0'), address: 'addr-' + index, name: 'Wallet ' + index, column: 3,
+    }))
+    const settings = layoutSettings({ maxRows: 10, columnGap: 420, rowGap: 100 })
+    const drawing = layout({ nodes, edges: [], count: 0 }, {}, {}, undefined, settings)
+    const lanes = [...new Set(Object.values(drawing.positions).map(point => point[0]))].sort((a, b) => a - b)
+    expect(lanes).toEqual([0, NODE_WIDTH + settings.columnGap])
+    const pitch = NODE_HEIGHT + settings.rowGap
+    expect(drawing.positions['01'][1] - drawing.positions['00'][1]).toBe(pitch)
+    expect(drawing.positions['08'][1] - drawing.positions['07'][1]).toBe(2 * pitch)
   })
 })
 

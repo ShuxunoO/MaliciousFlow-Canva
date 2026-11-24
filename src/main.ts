@@ -1,5 +1,5 @@
 import { History, latestBalances, project, sumDecimal } from './case'
-import type { CaseData, Draft, Edits, Filters, FlowEdge, HistorySnapshot, Point } from './case'
+import type { CanvasLayer, CaseData, Draft, Edits, Filters, FlowEdge, HistorySnapshot, LayoutSettings, Point } from './case'
 import { analysisUpdates, applyAnalysis, applyEntityMembership, entityMembers, investigationSummary, type AnalysisBatch, type Receipt } from './investigation'
 import { blockscout, type Collected } from './blockscout'
 import { traceTransfers, type TraceOptions } from './trace'
@@ -9,7 +9,7 @@ import { indexEvidence, conclusionFor, validateDraft, publishConclusion } from '
 import { importLocalReport } from './report-import'
 import { loadCase, saveCase } from './storage'
 import { demo } from './demo'
-import { layout, NODE_HEIGHT, NODE_WIDTH } from './layout'
+import { layout, layoutSettings, LAYOUT_LIMITS, NODE_HEIGHT, NODE_WIDTH } from './layout'
 import { graphData, makeGraph, renderedSnapshot, type EdgeLabels, type Selection } from './renderer'
 import { addressAccent, addressIcon } from './address-icons'
 import { nodeAssets } from './node-summary'
@@ -38,6 +38,9 @@ app.innerHTML = `
         <label>From <input type="date" id="from" aria-label="Start date UTC"></label>
         <label>Before <input type="date" id="to" aria-label="End date UTC"></label>
         <button id="grouped" aria-pressed="false">Group by entity</button><button id="reset">Reset filters</button>
+        <button id="box-select" aria-pressed="false">Box select</button>
+        <button id="layout-toggle" aria-expanded="false" aria-controls="layout-panel">Layout</button>
+        <button id="layers-toggle" aria-expanded="false" aria-controls="layers-panel">Layers</button>
       </div>
       <div class="canvas-body">
         <aside id="scope-panel" aria-label="Network scope" hidden>
@@ -49,6 +52,19 @@ app.innerHTML = `
         </aside>
         <div id="stage">
         <div id="graph"></div><div id="empty" hidden>No transfers match the current filters</div>
+        <div id="box-surface" hidden><div id="box-marquee" hidden></div></div>
+        <form id="layout-panel" class="canvas-popover stack" aria-label="Canvas layout" hidden>
+          <label>Row gap <input type="number" name="rowGap" required></label>
+          <label>Column gap <input type="number" name="columnGap" required></label>
+          <label>Max nodes per column <input type="number" name="maxRows" required></label>
+          <div class="actions"><button class="primary">Apply layout</button><button id="layout-reset" type="button">Default</button></div>
+        </form>
+        <section id="layers-panel" class="canvas-popover stack" aria-label="Canvas layers" hidden>
+          <form id="new-layer" class="stack"><label>Layer name <input name="name" required maxlength="80"></label>
+            <button id="new-layer-submit" class="primary">New layer</button>
+          </form>
+          <div id="layer-list" class="stack"></div>
+        </section>
         <button id="handle" aria-label="Drag transaction edge" hidden></button>
         <div id="footer"><div class="actions"><button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit">Fit</button></div><output id="status" aria-live="polite"></output></div>
         <section id="agent-panel" aria-label="Agent chat" hidden></section>
@@ -61,7 +77,16 @@ app.innerHTML = `
       <button id="report-toggle" aria-controls="report" aria-expanded="true" aria-pressed="true" aria-label="Collapse report"><span aria-hidden="true">›</span><span>Report</span></button>
       <aside id="report" aria-label="Case report"><header class="report-header section-heading"><h2>Case report</h2><button id="draft">New draft</button></header><div id="report-content"></div></aside>
     </div>
-  </div>`
+  </div>
+  <dialog id="node-editor" aria-labelledby="node-editor-title">
+    <form id="node-form" class="stack">
+      <h2 id="node-editor-title">Edit node</h2>
+      <code id="node-editor-address" class="mono"></code>
+      <label>Display name <input name="name" required autofocus></label>
+      <label>Note <textarea name="note"></textarea></label>
+      <div class="actions"><button class="primary">Save node</button><button type="button" id="node-edit-cancel">Cancel</button></div>
+    </form>
+  </dialog>`
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id)! as T
 const value = (id: string) => $<HTMLInputElement>(id).value
@@ -69,6 +94,11 @@ const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, characte
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!))
 let data = demo
 let selection: Selection | undefined
+let boxed = new Set<string>()
+let soloLayer: string | undefined
+let layerTransaction: string | undefined
+let editingNode: string | undefined
+let marquee: { pointer: number; start: Point } | undefined
 let filters: Filters = {}
 let edgeLabels: EdgeLabels = 'auto'
 let hidden = new Set<string>()
@@ -100,7 +130,7 @@ const provider = blockscout(import.meta.env.VITE_BLOCKSCOUT_URL || undefined)
 const graph = makeGraph($('graph'), setSelection, (id, point) => {
   keepPositions = true
   edit(edits => { edits.positions[id] = point })
-}, () => selection, toggleBranch)
+}, () => selection, toggleBranch, showNodeEditor)
 const status = (text: string) => { $('status').textContent = text }
 let graphSize = [0, 0]
 function resizeGraph() {
@@ -150,6 +180,8 @@ function toggleBranch(id: string, direction: 'in' | 'out') {
 }
 
 function setSelection(item?: Selection) {
+  boxed.clear()
+  layerTransaction = undefined
   if (linking && item?.type === 'node') {
     if (!linkSource) {
       linkSource = item.id
@@ -184,19 +216,21 @@ function updateHandle() {
 
 function render(fit = false, focus?: string, refreshInspector = true): Promise<void> {
   queue = queue.catch(() => {}).then(async () => {
-    view = project(data, history.value, filters, grouped, hidden, revealed)
+    view = project(data, history.value, filters, grouped, hidden, revealed, soloLayer)
     if (selection && ![...view.nodes, ...view.edges].some(item => item.id === selection?.id)) selection = undefined
-    const showInspector = !!selection && !linking
+    const visibleIds = new Set(view.nodes.map(node => node.id))
+    boxed = new Set([...boxed].filter(id => visibleIds.has(id)))
+    const showInspector = !!(selection || boxed.size) && !linking
     const anchor = selection && (drawing.positions[selection.id] ?? drawing.routes[selection.id]?.handle)
     const beforeResize = refreshInspector && $('selection').hidden === showInspector && anchor && !fit && !focus
       ? graph.getClientByCanvas(anchor) : undefined
     if (refreshInspector) $('selection').hidden = !showInspector
     resizeGraph()
     drawing = layout(view, keepPositions ? { ...drawing.positions, ...history.value.positions } : history.value.positions,
-      history.value.bends, keepPositions ? drawing : undefined)
+      history.value.bends, keepPositions ? drawing : undefined, history.value.layout)
     keepPositions = false
     assetsByNode = nodeAssets(data, view, filters.to)
-    graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection, edgeLabels))
+    graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection, edgeLabels, boxed))
     await graph.render()
     if (beforeResize && anchor) {
       const [x, y] = graph.getClientByCanvas(anchor)
@@ -215,6 +249,7 @@ function render(fit = false, focus?: string, refreshInspector = true): Promise<v
     const count = (total: number, word: string) => total.toLocaleString('en-US') + ' ' + word + (total === 1 ? '' : 's')
     status([count(view.nodes.length, 'node'), count(view.edges.length, 'edge'), count(view.count, 'transfer')].join(' · '))
     if (refreshInspector) renderSelection()
+    if (!$('layers-panel').hidden) renderLayers()
     renderAgentContext()
     if (linking) updateLinkStatus()
     updateHandle()
@@ -232,6 +267,10 @@ function openCase(next: CaseData) {
   entityPreview = undefined
   loadConversation()
   selection = undefined
+  boxed.clear()
+  soloLayer = undefined
+  setBoxMode(false)
+  $<HTMLDialogElement>('node-editor').close()
   filters = { core: !!(next.core ?? next.views?.core) }
   edgeLabels = 'auto'
   grouped = false
@@ -243,6 +282,9 @@ function openCase(next: CaseData) {
   reportMode = 'chapters'
   timelinePage = 0
   history = History.restore(readEdits(next.id))
+  syncLayout()
+  showPopover('layout', false)
+  showPopover('layers', false)
   $<HTMLInputElement>('case-title').value = history.value.title ?? next.title
   renderScopes()
   $('grouped').setAttribute('aria-pressed', 'false')
@@ -351,6 +393,7 @@ function eventRows(events: FlowEdge['events']): string {
       <code class="mono">${esc(item.hash)}</code>
       <div class="subtle">${esc(item.sources?.join(' · '))}${item.verification ? ' · ' + esc(item.verification) : ''}</div>
       <button class="ref" data-report="${esc(item.id)}">${item.evidence ? 'Evidence ' + esc(item.evidence) : 'Transaction source'}</button>
+      <button data-layer-event="${esc(item.id)}">Add transfer to layer</button>
       <label>Transaction note<textarea data-note="${esc(item.id)}">${esc(history.value.notes[item.id] ?? item.note)}</textarea></label>
     </div>`).join('')
   return entries + (events.length > 8
@@ -361,8 +404,14 @@ function renderSelection() {
   const panel = $('selection')
   const node = selection?.type === 'node' ? view.nodes.find(item => item.id === selection?.id) : undefined
   const edge = selection?.type === 'edge' ? view.edges.find(item => item.id === selection?.id) : undefined
-  panel.hidden = linking || !node && !edge
+  panel.hidden = linking || !node && !edge && !boxed.size
   const close = (revealed ? '<button data-return-view>Return to previous view</button>' : '') + '<button data-close aria-label="Close details">×</button>'
+  if (boxed.size) {
+    const nodes = view.nodes.filter(item => boxed.has(item.id))
+    panel.innerHTML = `<div class="section-heading"><h3>${nodes.length} selected ${nodes.length === 1 ? 'node' : 'nodes'}</h3>${close}</div>
+      <div class="stack"><button data-open-layers>Add selection to layer</button>
+      <div class="inspector-paths">${nodes.map(item => `<button data-focus="${esc(item.id)}"><span>${esc(item.name)}</span><small>${esc(item.role ?? 'Address')}</small></button>`).join('')}</div></div>`
+  }
   if (node) {
     const icon = addressIcon(node)
     const adjacent = view.edges.filter(item => item.source === node.id || item.target === node.id)
@@ -395,6 +444,7 @@ function renderSelection() {
       <div class="actions"><button data-direction="in">${hidden.has(node.id + ':in') ? 'Expand' : 'Collapse'} inflow</button><button data-direction="out">${hidden.has(node.id + ':out') ? 'Expand' : 'Collapse'} outflow</button></div>
       <div class="actions"><button data-neighbors>Filter to selection</button>${node.members ? '<button data-members>Edit members</button><button data-ungroup>Ungroup</button>'
         : '<button data-group>Assign to entity</button><button data-link>Add relationship</button>'}</div>
+      <div class="actions"><button data-edit-card="${esc(node.id)}">Edit node</button><button data-open-layers>Add to layer</button></div>
       ${adjacent.length ? `<details open><summary>Adjacent paths · ${adjacent.length}</summary><div class="inspector-paths">
         ${adjacent.slice(0, 8).map(path).join('')}</div>${adjacent.length > 8 ? '<small>Showing the first 8 paths. Filter to selection to explore all paths on the canvas.</small>' : ''}</details>` : ''}
       ${related.length ? `<details data-related ${relatedOpen ? 'open' : ''}><summary>Related transfers · ${related.length}</summary>${eventRows(related)}</details>` : ''}
@@ -407,6 +457,7 @@ function renderSelection() {
       <div>${esc(view.nodes.find(node => node.id === edge.source)?.name)} → ${esc(view.nodes.find(node => node.id === edge.target)?.name)}</div>
       ${edge.asset ? `<div class="subtle">${esc(edge.amount)} ${esc(edge.asset)} · ${edge.events.length} transfers<br>USD ${esc(usd)}</div>` : ''}
       <label>Edge note<textarea data-note="${esc(edge.id)}">${esc(history.value.notes[edge.id] ?? edge.note)}</textarea></label>
+      <button data-open-layers>Add to layer</button>
       ${eventRows(edge.events)}</div>`
   }
 }
@@ -427,6 +478,7 @@ async function locate(reference: string) {
     return
   }
   selection = edge || directEdge ? { type: 'edge', id: (edge ?? directEdge)!.id } : { type: 'node', id: node!.id }
+  boxed.clear()
   page = edge && item ? Math.floor(edge.events.indexOf(item) / 8) : 0
   await render(false, selection.id)
 }
@@ -509,7 +561,8 @@ function renderAgentContext() {
   const context = $('agent-context')
   if (!context) return
   context.textContent = selection ? (view.nodes.find(item => item.id === selection?.id)?.name
-    ?? view.edges.find(item => item.id === selection?.id)?.events[0]?.evidence ?? 'Selected transaction') : 'No selection'
+    ?? view.edges.find(item => item.id === selection?.id)?.events[0]?.evidence ?? 'Selected transaction')
+    : boxed.size ? boxed.size + ' selected nodes' : 'No selection'
 }
 
 function applyFilters(fit = true) {
@@ -518,6 +571,238 @@ function applyFilters(fit = true) {
     includeContext: $<HTMLInputElement>('include-context').checked ? undefined : false }
   revealed = undefined
   void render(fit)
+}
+
+function showPopover(name: 'layout' | 'layers', open: boolean) {
+  if (open) showPopover(name === 'layout' ? 'layers' : 'layout', false)
+  $(name + '-panel').hidden = !open
+  $(name + '-toggle').setAttribute('aria-expanded', String(open))
+  if (open && name === 'layers') renderLayers()
+  if (!open && name === 'layers') layerTransaction = undefined
+}
+
+function showNodeEditor(id: string) {
+  const node = view.nodes.find(item => item.id === id)
+  if (!node) return
+  const form = $<HTMLFormElement>('node-form')
+  const name = form.elements.namedItem('name') as HTMLInputElement
+  const note = form.elements.namedItem('note') as HTMLTextAreaElement
+  editingNode = id
+  $('node-editor-address').textContent = node.address
+  name.value = node.name
+  note.value = history.value.notes[id] ?? ''
+  $<HTMLDialogElement>('node-editor').showModal()
+}
+
+$<HTMLFormElement>('node-form').onsubmit = event => {
+  event.preventDefault()
+  if (!editingNode) return
+  const id = editingNode
+  const fields = new FormData(event.target as HTMLFormElement)
+  const name = String(fields.get('name')).trim()
+  if (!name) return
+  edit(edits => {
+    edits.names[id] = name
+    edits.notes[id] = String(fields.get('note'))
+  })
+  updateAddresses()
+  $<HTMLDialogElement>('node-editor').close()
+}
+$('node-edit-cancel').onclick = () => $<HTMLDialogElement>('node-editor').close()
+$('node-editor').addEventListener('close', () => { editingNode = undefined })
+
+function setBoxMode(active: boolean) {
+  const surface = $('box-surface')
+  if (marquee && surface.hasPointerCapture(marquee.pointer)) surface.releasePointerCapture(marquee.pointer)
+  marquee = undefined
+  $('box-marquee').hidden = true
+  surface.hidden = !active
+  $('box-select').setAttribute('aria-pressed', String(active))
+}
+
+function boxBounds(start: Point, end: Point) {
+  return { left: Math.min(start[0], end[0]), right: Math.max(start[0], end[0]),
+    top: Math.min(start[1], end[1]), bottom: Math.max(start[1], end[1]) }
+}
+
+const boxSurface = $('box-surface')
+boxSurface.onpointerdown = event => {
+  if (event.button !== 0 || marquee) return
+  marquee = { pointer: event.pointerId, start: [event.clientX, event.clientY] }
+  boxSurface.setPointerCapture(event.pointerId)
+}
+boxSurface.onpointermove = event => {
+  if (marquee?.pointer !== event.pointerId) return
+  const bounds = boxBounds(marquee.start, [event.clientX, event.clientY])
+  const surface = boxSurface.getBoundingClientRect()
+  const box = $('box-marquee')
+  box.hidden = false
+  box.style.left = bounds.left - surface.left + 'px'
+  box.style.top = bounds.top - surface.top + 'px'
+  box.style.width = bounds.right - bounds.left + 'px'
+  box.style.height = bounds.bottom - bounds.top + 'px'
+}
+boxSurface.onpointerup = event => {
+  if (marquee?.pointer !== event.pointerId) return
+  const client: Point = [event.clientX, event.clientY]
+  const start = marquee.start
+  const drag = Math.hypot(client[0] - start[0], client[1] - start[1]) >= 4
+  const [startX, startY] = graph.getCanvasByClient(start)
+  const [endX, endY] = graph.getCanvasByClient(client)
+  const bounds = boxBounds([startX, startY], [endX, endY])
+  boxed = new Set(drag ? view.nodes.filter(node => {
+    const [x, y] = drawing.positions[node.id]
+    return x - NODE_WIDTH / 2 <= bounds.right && x + NODE_WIDTH / 2 >= bounds.left &&
+      y - NODE_HEIGHT / 2 <= bounds.bottom && y + NODE_HEIGHT / 2 >= bounds.top
+  }).map(node => node.id) : [])
+  selection = undefined
+  revealed = undefined
+  setBoxMode(false)
+  keepPositions = true
+  void render()
+}
+boxSurface.onpointercancel = () => setBoxMode(false)
+$('box-select').onclick = () => {
+  if (linking) exitLinkMode()
+  showPopover('layers', false)
+  showPopover('layout', false)
+  setBoxMode(boxSurface.hidden)
+}
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !boxSurface.hidden) setBoxMode(false)
+})
+
+const layoutForm = $<HTMLFormElement>('layout-panel')
+function syncLayout() {
+  const values = layoutSettings(history.value.layout)
+  for (const key of Object.keys(values) as (keyof LayoutSettings)[]) {
+    const input = layoutForm.elements.namedItem(key) as HTMLInputElement
+    input.min = String(LAYOUT_LIMITS[key].min)
+    input.max = String(LAYOUT_LIMITS[key].max)
+    input.value = String(values[key])
+  }
+}
+function applyCanvasLayout(settings: Partial<LayoutSettings>) {
+  const next = layoutSettings({ ...history.value.layout, ...settings })
+  edit(edits => { edits.layout = next })
+  syncLayout()
+  return next
+}
+layoutForm.onsubmit = event => {
+  event.preventDefault()
+  const fields = new FormData(layoutForm)
+  applyCanvasLayout({ rowGap: Number(fields.get('rowGap')), columnGap: Number(fields.get('columnGap')),
+    maxRows: Number(fields.get('maxRows')) })
+  showPopover('layout', false)
+  void render(true)
+}
+$('layout-reset').onclick = () => {
+  applyCanvasLayout(layoutSettings())
+  void render(true)
+}
+$('layout-toggle').onclick = () => showPopover('layout', layoutForm.hidden)
+
+function selectionRefs(): string[] {
+  if (layerTransaction) return [layerTransaction]
+  const ids = new Set(boxed)
+  if (selection?.type === 'node') ids.add(selection.id)
+  const refs = new Set(view.nodes.filter(node => ids.has(node.id)).flatMap(node => node.members ?? [node.id]))
+  for (const edge of view.edges) {
+    if (edge.id !== selection?.id && !(boxed.has(edge.source) && boxed.has(edge.target))) continue
+    for (const ref of edge.events.length ? edge.events.map(item => item.id) : [edge.id]) refs.add(ref)
+  }
+  return [...refs]
+}
+
+type LayerCommand =
+  | { action: 'create'; name: string; refs?: string[] }
+  | { action: 'assign' | 'unassign'; id: string; refs: string[] }
+  | { action: 'rename'; id: string; name: string }
+  | { action: 'visibility'; id: string; visible: boolean }
+  | { action: 'delete'; id: string }
+  | { action: 'show_unassigned'; visible: boolean }
+  | { action: 'solo'; id?: string }
+
+function changeLayer(command: LayerCommand) {
+  const existing = 'id' in command ? history.value.layers?.find(layer => layer.id === command.id) : undefined
+  if ('id' in command && command.id !== undefined && !existing) throw new Error('Unknown canvas layer')
+  if (command.action === 'solo') {
+    soloLayer = soloLayer === command.id ? undefined : command.id
+    revealed = undefined
+    void render(true)
+    return soloLayer
+  }
+  const name = 'name' in command ? command.name.trim() : ''
+  if ('name' in command && !name) throw new Error('Enter a layer name')
+  const known = 'refs' in command && command.refs?.length ? new Set([
+    ...data.addresses.map(node => node.id), ...data.transfers.map(item => item.id), ...history.value.relations.map(item => item.id),
+  ]) : undefined
+  const refs = 'refs' in command ? [...new Set(command.refs ?? [])] : []
+  if (known && refs.some(ref => !known.has(ref))) throw new Error('Unknown layer reference')
+  const created: CanvasLayer | undefined = command.action === 'create' ? { id: crypto.randomUUID(), name, refs, visible: true } : undefined
+  if (command.action === 'delete' && soloLayer === command.id) soloLayer = undefined
+  revealed = undefined
+  edit(edits => {
+    if (created) { (edits.layers ??= []).push(created); return }
+    if (command.action === 'show_unassigned') { edits.showUnassigned = command.visible; return }
+    if (command.action === 'delete') { edits.layers = edits.layers?.filter(layer => layer.id !== command.id); return }
+    const layer = 'id' in command ? edits.layers?.find(item => item.id === command.id) : undefined
+    if (!layer) return
+    if (command.action === 'assign') layer.refs = [...new Set([...layer.refs, ...refs])]
+    if (command.action === 'unassign') {
+      const removed = new Set(refs)
+      layer.refs = layer.refs.filter(ref => !removed.has(ref))
+    }
+    if (command.action === 'visibility') layer.visible = command.visible
+    if (command.action === 'rename') layer.name = name
+  })
+  return created?.id
+}
+
+function renderLayers() {
+  const refs = selectionRefs()
+  const transfer = layerTransaction && evidence.get(layerTransaction)
+  $('layer-list').innerHTML = (transfer ? `<small>Selected transfer · ${esc(transfer.evidence ?? transfer.hash)}</small>` : '') +
+    `<label class="layer-visibility"><input type="checkbox" data-unassigned
+    ${history.value.showUnassigned === false ? '' : 'checked'}>Unassigned objects</label>` +
+    (history.value.layers ?? []).map(layer => `<div class="layer-row stack" data-layer="${esc(layer.id)}">
+      <div class="layer-heading"><input type="checkbox" data-visible aria-label="Show layer ${esc(layer.name)}" ${layer.visible ? 'checked' : ''}>
+      <input data-layer-name aria-label="Rename layer" value="${esc(layer.name)}" maxlength="80">
+      <button data-solo aria-pressed="${soloLayer === layer.id}">Solo</button></div>
+      <div class="actions"><small>${layer.refs.length} items</small><button data-assign ${refs.length ? '' : 'disabled'}>Add selection</button>
+      <button data-unassign ${refs.length ? '' : 'disabled'}>Remove selection</button>
+      <button data-delete-layer>Delete layer</button></div></div>`).join('')
+  $<HTMLButtonElement>('new-layer-submit').textContent = refs.length ? 'New layer from selection' : 'New layer'
+}
+
+$('layers-toggle').onclick = () => showPopover('layers', $('layers-panel').hidden)
+$<HTMLFormElement>('new-layer').onsubmit = event => {
+  event.preventDefault()
+  const form = event.target as HTMLFormElement
+  const name = String(new FormData(form).get('name')).trim()
+  if (!name) return
+  changeLayer({ action: 'create', name, refs: selectionRefs() })
+  form.reset()
+}
+$('layer-list').onchange = event => {
+  const input = event.target as HTMLInputElement
+  const id = input.closest<HTMLElement>('[data-layer]')?.dataset.layer
+  if (input.hasAttribute('data-unassigned')) changeLayer({ action: 'show_unassigned', visible: input.checked })
+  if (!id) return
+  if (input.hasAttribute('data-visible')) changeLayer({ action: 'visibility', id, visible: input.checked })
+  if (input.hasAttribute('data-layer-name')) {
+    if (input.value.trim()) changeLayer({ action: 'rename', id, name: input.value })
+    else renderLayers()
+  }
+}
+$('layer-list').onclick = event => {
+  const button = (event.target as HTMLElement).closest('button')
+  const id = button?.closest<HTMLElement>('[data-layer]')?.dataset.layer
+  if (!button || !id) return
+  if (button.hasAttribute('data-solo')) changeLayer({ action: 'solo', id })
+  if (button.hasAttribute('data-assign')) changeLayer({ action: 'assign', id, refs: selectionRefs() })
+  if (button.hasAttribute('data-unassign')) changeLayer({ action: 'unassign', id, refs: selectionRefs() })
+  if (button.hasAttribute('data-delete-layer')) changeLayer({ action: 'delete', id })
 }
 
 for (const id of ['asset', 'include-context', 'from', 'to', 'address-filter']) $(id).addEventListener('change', () => applyFilters())
@@ -605,6 +890,7 @@ function restore() {
   updateAddresses()
   $<HTMLInputElement>('case-title').value = history.value.title ?? data.title
   renderReport()
+  syncLayout()
   void render()
 }
 $('undo').onclick = () => { history.undo(); restore() }
@@ -699,6 +985,11 @@ document.addEventListener('click', event => {
     renderReport()
   }
   if (button.dataset.report) reportEvidence(button.dataset.report)
+  if (button.dataset.editCard) showNodeEditor(button.dataset.editCard)
+  if (button.hasAttribute('data-open-layers') || button.dataset.layerEvent) {
+    layerTransaction = button.dataset.layerEvent
+    showPopover('layers', true)
+  }
   if (button.hasAttribute('data-close')) {
     revealed = undefined
     setSelection()
@@ -870,7 +1161,8 @@ function applyBatch(batch: AnalysisBatch): Promise<Receipt> {
 
 function getAgentContext(): AgentContext {
   const node = selection?.type === 'node' ? view.nodes.find(item => item.id === selection?.id) : undefined
-  return structuredClone({ caseId: data.id, selection, node, filters, transfers: selectedTransfers(),
+  const selectedNodes = boxed.size ? view.nodes.filter(item => boxed.has(item.id)) : undefined
+  return structuredClone({ caseId: data.id, selection, node, selectedNodes, filters, transfers: selectedTransfers(),
     assets: node ? assetsByNode.get(node.id) ?? [] : [] })
 }
 
@@ -903,6 +1195,7 @@ $('agent-chat-form').addEventListener('submit', async event => {
 function selectedTransfers() {
   const edge = view.edges.find(item => item.id === selection?.id)
   if (edge) return edge.events
+  if (boxed.size) return view.edges.filter(item => boxed.has(item.source) || boxed.has(item.target)).flatMap(item => item.events)
   if (!selection) return view.edges.flatMap(item => item.events)
   return view.edges.filter(item => item.source === selection?.id || item.target === selection?.id).flatMap(item => item.events)
 }
@@ -1045,6 +1338,9 @@ Object.assign(window, {
     collect: collectInvestigation,
     stop_collection: () => investigation?.abort(),
     get_selection: getAgentContext,
+    get_layers: () => structuredClone({ layers: history.value.layers ?? [], showUnassigned: history.value.showUnassigned !== false, soloLayer }),
+    edit_layer: changeLayer,
+    set_layout: applyCanvasLayout,
     show_evidence: (ref: string) => {
       const item = evidence.get(ref)
       if (!item) throw new Error('Unknown evidence reference')
@@ -1085,6 +1381,7 @@ Object.assign(window, {
         }
         if (input.clearSelection) {
           selection = undefined
+          boxed.clear()
           revealed = undefined
         }
         await render(input.fit)
@@ -1094,6 +1391,7 @@ Object.assign(window, {
       }
       if (ref) await locate(ref)
       return { caseId: data.id, revision: data.analysis?.revision ?? 0, selection: selection && { ...selection }, filters: { ...filters },
+        selectedNodes: [...boxed], layout: layoutSettings(history.value.layout), soloLayer,
         visibleNodes: view.nodes.length, visibleTransfers: view.count, grouped, edgeLabels, zoom: graph.getZoom() }
     },
     edit_canvas: (command: CanvasCommand) => {
@@ -1197,16 +1495,23 @@ export function canvasCoordinates(id: string): Point | undefined {
 }
 
 function inspectDrawing() {
+  const states = new Map((graph.getData().nodes ?? []).map(item => [item.id, item.states]))
   return {
     nodes: view.nodes.map(node => ({
       id: node.id,
+      states: states.get(node.id),
       box: [drawing.positions[node.id][0] - NODE_WIDTH / 2, drawing.positions[node.id][1] - NODE_HEIGHT / 2, NODE_WIDTH, NODE_HEIGHT],
     })),
     edges: graph.getData().edges?.map(edge => {
       const route = drawing.routes[edge.id!]
-      return { id: edge.id, source: edge.source, target: edge.target, points: route.points, path: route.path, blocked: route.blocked }
+      return { id: edge.id, source: edge.source, target: edge.target, states: edge.states,
+        points: route.points, path: route.path, blocked: route.blocked }
     }) ?? [],
   }
 }
 
-if (import.meta.env.DEV) Object.assign(window, { flowCanvas: { canvasCoordinates, inspectDrawing, renderedSnapshot: () => renderedSnapshot(graph, view, activeScope()) } })
+if (import.meta.env.DEV) Object.assign(window, { flowCanvas: { canvasCoordinates, inspectDrawing,
+  nodeActionPoint: (id: string, offset: Point) => graph.getClientByCanvas([
+    drawing.positions[id][0] + offset[0], drawing.positions[id][1] + offset[1],
+  ]),
+  renderedSnapshot: () => renderedSnapshot(graph, view, activeScope()) } })

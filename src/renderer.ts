@@ -25,6 +25,7 @@ interface FlowNodeStyle extends RectStyleProps {
   accent: string
   collapsedIn: boolean
   collapsedOut: boolean
+  muted: boolean
 }
 
 export class BaseFlowNode extends Rect {
@@ -34,26 +35,38 @@ export class BaseFlowNode extends Rect {
   }
 
   protected drawLabelShape(attributes: Required<FlowNodeStyle>, container: NonNullable<Parameters<Rect['render']>[1]>) {
-    const { title, address, roleName, roleImage, note, figures, accent, collapsedIn, collapsedOut } = attributes
+    const { title, address, roleName, roleImage, note, figures, accent, collapsedIn, collapsedOut, muted } = attributes
+    const opacity = muted ? .3 : 1
     const text = (key: string, value: string, x: number, y: number, fill: string, fontSize = 10, more = {}) =>
       this.upsert(key, 'text', { x, y, text: value, fill, fontFamily: 'Inter, sans-serif',
-        fontSize, textBaseline: 'middle', pointerEvents: 'none', ...more }, container)
-    this.upsert('role-icon', 'rect', { x: -101, y: -35, width: 25, height: 25, radius: 6,
-      fill: accent, opacity: roleImage ? .35 : .9, pointerEvents: 'none' }, container)
+        fontSize, opacity, textBaseline: 'middle', pointerEvents: 'none', ...more }, container)
+    const left = -NODE_WIDTH / 2 + 14
+    this.upsert('role-icon', 'rect', { x: left, y: -49, width: 26, height: 26, radius: 6,
+      fill: accent, opacity: opacity * (roleImage ? .35 : .9), pointerEvents: 'none' }, container)
     this.upsert('role-image', 'image', roleImage ? {
-      src: roleImage, x: -98.5, y: -32.5, width: 20, height: 20, pointerEvents: 'none',
+      src: roleImage, x: left + 3, y: -46, width: 20, height: 20, opacity, pointerEvents: 'none',
     } : false, container)
-    if (!roleImage) text('role-glyph', this.glyph, -88.5, -22.5, '#10151e', 14, { textAlign: 'center', fontWeight: 700 })
-    text('title', title, -69, -24, '#edf2ff', 15, { fontWeight: 650 })
-    text('role', roleName, -69, -9, '#b4c0da', 10)
-    text('address', address, -101, 35, '#b1bfdb', 11, { fontFamily: 'monospace' })
-    text('note', note, -101, 12, '#edcf9a', 9)
-    this.upsert('figure-panel', 'rect', { x: 34, y: -13, width: 69, height: 39, radius: 4,
-      fill: '#0b1320', opacity: .48, pointerEvents: 'none' }, container)
-    figures.forEach((figure, index) => text('figure-' + index, figure, 39, -4 + index * 11, '#e0eaff', 9))
+    if (!roleImage) text('role-glyph', this.glyph, left + 13, -36, '#10151e', 14, { textAlign: 'center', fontWeight: 700 })
+    text('title', title, left + 35, -43, '#edf2ff', 15, { fontWeight: 650, wordWrap: true, wordWrapWidth: 198, maxLines: 1, textOverflow: 'ellipsis' })
+    text('role', roleName, left + 35, -25, '#b4c0da', 10, { wordWrap: true, wordWrapWidth: 198, maxLines: 1, textOverflow: 'ellipsis' })
+    text('note', note, left, -8, '#edcf9a', 11, {
+      textBaseline: 'top', wordWrap: true, wordWrapWidth: 166, maxLines: 3, lineHeight: 13, textOverflow: 'ellipsis',
+    })
+    this.upsert('figure-panel', 'rect', { x: 32, y: -13, width: 114, height: 43, radius: 5,
+      fill: '#0b1320', opacity: .72 * opacity, pointerEvents: 'none' }, container)
+    figures.forEach((figure, index) => text('figure-' + index, figure, 39, -3 + index * 12, '#e0eaff', 10, {
+      wordWrap: true, wordWrapWidth: 102, maxLines: 1, textOverflow: 'ellipsis',
+    }))
+    this.upsert('address-background', 'rect', { x: left, y: 35, width: NODE_WIDTH - 28, height: 22, radius: 4,
+      fill: '#142033', opacity: .65 * opacity, pointerEvents: 'none' }, container)
+    text('address', address, left + 5, 46, '#d0dcf1',
+      Math.min(11, 280 / (Math.max(1, Array.from(address).length) * .61)), { fontFamily: 'monospace' })
+    this.upsert('edit-node', 'rect', { x: 105, y: -50, width: 41, height: 21, radius: 5,
+      fill: '#253650', stroke: '#62799c', opacity, cursor: 'pointer' }, container)
+    text('edit-caption', 'Edit', 125.5, -39.5, '#e3ecfc', 10, { textAlign: 'center' })
     for (const [direction, x, collapsed] of [['in', -NODE_WIDTH / 2, collapsedIn], ['out', NODE_WIDTH / 2, collapsedOut]] as const) {
       this.upsert('branch-' + direction, 'circle', { cx: x, cy: 0, r: 8, fill: '#171e2c',
-        stroke: accent, lineWidth: 1, cursor: 'pointer' }, container)
+        stroke: accent, lineWidth: 1, opacity, cursor: 'pointer' }, container)
       text('branch-sign-' + direction, collapsed ? '+' : '−', x, 0, '#eef3ff', 10, { textAlign: 'center' })
     }
   }
@@ -99,7 +112,9 @@ export function renderedSnapshot(graph: Graph, view: FlowView, name: string) {
   return {
     geometry: 'rendered', view: name, tolerance: .5,
     nodes: view.nodes.map(node => ({ id: node.id, box: boxFor(node.id, 'key'),
-      hasIcon: !!elements.get(node.id)?.getShape('role-image') })),
+      hasIcon: !!elements.get(node.id)?.getShape('role-image'),
+      card: { note: boxFor(node.id, 'note'), ledger: boxFor(node.id, 'figure-panel'), address: boxFor(node.id, 'address'),
+        addressText: elements.get(node.id)?.getShape('address')?.attributes.text } })),
     edges: view.edges.map(edge => {
       const key = elements.get(edge.id)?.getShape('key')
       if (!key) throw new Error('Transaction edge was not rendered ' + edge.id)
@@ -119,7 +134,7 @@ export type Selection = { type: 'node' | 'edge'; id: string }
 
 export function makeGraph(container: HTMLElement, select: (item?: Selection) => void,
   move: (id: string, point: Point) => void, selected: () => Selection | undefined,
-  toggleBranch: (id: string, direction: 'in' | 'out') => void) {
+  toggleBranch: (id: string, direction: 'in' | 'out') => void, editNode: (id: string) => void) {
   const graph = new Graph({
     container, padding: 56, animation: false, zoomRange: [0.008, 3],
     behaviors: [
@@ -127,14 +142,18 @@ export function makeGraph(container: HTMLElement, select: (item?: Selection) => 
       { type: 'drag-element', key: 'move', enable: (event: { targetType: string; target: { id: string } }) =>
         event.targetType === 'node' && selected()?.id === event.target.id },
     ],
-    node: { state: { selected: { stroke: '#6bf1cc', lineWidth: 3 } } },
-    edge: { state: { selected: { stroke: '#f4cb7e', endArrowFill: '#f4cb7e', lineWidth: 3 } } },
+    node: { state: { selected: { stroke: '#6bf1cc', strokeOpacity: 1, lineWidth: 3 },
+      related: { stroke: '#a8c1ff', strokeOpacity: 1, lineWidth: 2 } } },
+    edge: { state: { selected: { stroke: '#f4cb7e', endArrowFill: '#f4cb7e', lineWidth: 3 },
+      related: { stroke: '#87dacc', endArrowFill: '#87dacc', lineWidth: 2.7 } } },
   })
   graph.on(NodeEvent.CLICK, event => {
     if (!('target' in event && event.target && 'id' in event.target)) return
     const id = String(event.target.id)
     const shape = 'originalTarget' in event ? event.originalTarget.className : ''
-    if (shape === 'branch-in' || shape === 'branch-out') {
+    if (shape === 'edit-node' || shape === 'edit-caption') {
+      editNode(id)
+    } else if (shape === 'branch-in' || shape === 'branch-out') {
       toggleBranch(id, shape === 'branch-in' ? 'in' : 'out')
     } else {
       select({ type: 'node', id })
@@ -164,8 +183,20 @@ function truncate(text: string, length: number) {
 export type EdgeLabels = 'auto' | 'on' | 'off'
 
 export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets: Map<string, NodeAsset[]>,
-  hidden: Set<string>, selected?: Selection, labels: EdgeLabels = 'auto'): GraphData {
+  hidden: Set<string>, selected?: Selection, labels: EdgeLabels = 'auto', boxed = new Set<string>()): GraphData {
   const showAllLabels = labels === 'on' || labels === 'auto' && view.edges.length < 190
+  const primary = new Set(boxed)
+  if (selected?.type === 'node') primary.add(selected.id)
+  const relatedNodes = new Set(primary)
+  const relatedEdges = new Set<string>()
+  for (const edge of view.edges) {
+    if (!primary.has(edge.source) && !primary.has(edge.target) &&
+      !(selected?.type === 'edge' && selected.id === edge.id)) continue
+    relatedEdges.add(edge.id)
+    relatedNodes.add(edge.source)
+    relatedNodes.add(edge.target)
+  }
+  const focusing = !!(primary.size || selected)
   return {
     nodes: view.nodes.map(node => {
       const [x, y] = drawing.positions[node.id]
@@ -176,17 +207,18 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
         asset.balances.length ? compactQuantity(asset.balances) + (asset.prices.length ? ' / $' + compactQuantity(asset.prices) : '') : 'Bal –',
       ] : ['In –', 'Out –', 'Bal –']
       const accent = addressAccent(node.color)
-      const short = node.address.length > 24 ? node.address.slice(0, 12) + '…' + node.address.slice(-7) : node.address
       const note = edits.notes[node.id] ?? ''
+      const muted = focusing && !relatedNodes.has(node.id)
       return {
-        id: node.id, type: node.members ? 'flow-entity' : 'flow-address', states: selected?.id === node.id ? ['selected'] : [],
+        id: node.id, type: node.members ? 'flow-entity' : 'flow-address',
+        states: primary.has(node.id) ? ['selected'] : relatedNodes.has(node.id) ? ['related'] : [],
         style: {
           x, y, size: [NODE_WIDTH, NODE_HEIGHT], radius: 10,
-          fill: cardFill(accent), stroke: accent, strokeOpacity: .64, lineWidth: 1.4,
-          title: truncate(node.name, 19), address: short,
+          fill: cardFill(accent), fillOpacity: muted ? .45 : 1, stroke: accent, strokeOpacity: muted ? .22 : .64, lineWidth: 1.4,
+          title: node.name, address: node.address,
           roleImage: addressIcon(node),
-          roleName: truncate([node.role ?? 'Address', asset?.symbol].filter(Boolean).join(' · '), 26),
-          note: note ? truncate(note, 22) : '', figures: figures.map(item => truncate(item, 14)), accent,
+          roleName: [node.role ?? 'Address', asset?.symbol].filter(Boolean).join(' · '),
+          note: truncate(note, 125), figures, accent, muted,
           collapsedIn: hidden.has(node.id + ':in'), collapsedOut: hidden.has(node.id + ':out'), cursor: 'grab',
         },
       }
@@ -198,10 +230,13 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
       const time = first ? first.time.slice(0, first === last ? 19 : 10).replace('T', ' ') : ''
       const period = first !== last && last ? time + ' → ' + last.time.slice(0, 10) : time
       const color = edge.asset === 'ETH' ? '#76a6f8' : edge.events.length ? '#66cbb6' : '#baba83'
+      const related = relatedEdges.has(edge.id)
       return {
-        id: edge.id, type: 'transaction-path', source: edge.source, target: edge.target, states: selected?.id === edge.id ? ['selected'] : [],
+        id: edge.id, type: 'transaction-path', source: edge.source, target: edge.target,
+        states: selected?.id === edge.id ? ['selected'] : related ? ['related'] : [],
         style: {
-          route, loop: false, stroke: color, lineWidth: 1.55, increasedLineWidthForHitTesting: 9,
+          route, loop: false, stroke: color, opacity: focusing && !related ? .19 : 1,
+          lineWidth: 1.55, increasedLineWidthForHitTesting: 9,
           lineDash: edge.events.length ? undefined : [6, 5], endArrow: true, endArrowType: 'triangle',
           endArrowFill: color, endArrowSize: 10, cursor: 'pointer', labelAutoRotate: false,
           labelText: (showAllLabels && drawing.labels.has(edge.id)) || (labels !== 'off' && selected?.id === edge.id)

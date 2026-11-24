@@ -7,7 +7,10 @@ The application exposes `window.maliciousFlow` to JavaScript running in the canv
 | Method | Input | Result |
 | --- | --- | --- |
 | `set_view()` | Optional reference string or view options | Resolves to the active case ID, analysis revision, selection, filters, grouping, visible counts and zoom level |
-| `get_selection()` | None | Returns a copy of the view context, including selected node, related transfers, filter bounds, and asset balances |
+| `get_selection()` | None | Returns the selected object or boxed nodes, their visible transfers, filter bounds, and single-node asset balances |
+| `set_layout(settings)` | Any subset of `{ rowGap, columnGap, maxRows }` | Saves the merged, normalized layout settings for the active case and returns them |
+| `get_layers()` | None | Returns layer names, visibility, stable member references, unassigned visibility and the current solo layer |
+| `edit_layer(command)` | Layer command described below | Applies a membership or visibility change. Creating a layer returns its ID |
 | `collect(seed, trace?)` | Ethereum address or transaction hash and optional `{ direction, hops }` | Queries the data provider, applies verified batches, then returns the data coverage statement and event references |
 | `stop_collection()` | None | Aborts an ongoing provider request. Previously committed results remain available |
 | `analysis_updates(caseId, afterRevision)` | Case ID and last processed analysis revision | Returns subsequent persisted receipts in order, including after a reload |
@@ -44,6 +47,22 @@ A reference can be an address ID, entity ID, graph edge ID, transaction event ID
 | `undo`, `redo` | None |
 
 The canvas renders manual relationships as dashed edges. The transaction ledger continues to represent sourced on-chain events.
+
+### Layout and layers
+
+`rowGap` and `columnGap` are clear distances between card edges in canvas units. The accepted ranges are 48–360 and 290–1100. `maxRows` accepts 2–60 and caps the number of automatically placed cards per physical column. Defaults are 70, 340, and 24. Manual node positions take precedence. `set_view()` returns the current settings, boxed node IDs and solo layer ID.
+
+| Layer action | Fields |
+| --- | --- |
+| `create` | `name` and optional `refs` |
+| `assign`, `unassign` | Layer `id` and `refs` |
+| `rename` | Layer `id` and `name` |
+| `visibility` | Layer `id` and boolean `visible` |
+| `show_unassigned` | Boolean `visible` |
+| `solo` | Layer `id`. Call again with the same ID or omit it to leave solo mode |
+| `delete` | Layer `id` |
+
+Layer members are address IDs, individual transfer event IDs and manual relationship IDs. Multiple visible memberships show the same object once. Hiding an event removes it from the balance of its displayed aggregate edge. Endpoints of visible edges remain visible. Without a solo layer, objects with no memberships follow the unassigned visibility setting. All settings except solo mode are case edits and support undo and redo.
 
 ## Analysis batches
 

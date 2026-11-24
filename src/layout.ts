@@ -1,9 +1,21 @@
-import type { FlowView, Point } from './case'
+import type { FlowView, LayoutSettings, Point } from './case'
 
-export const NODE_WIDTH = 224
-export const NODE_HEIGHT = 96
-const COLUMN = 520
-const ROW = 162
+export const NODE_WIDTH = 320
+export const NODE_HEIGHT = 128
+export const LAYOUT_LIMITS = {
+  rowGap: { min: 48, max: 360, default: 70 },
+  columnGap: { min: 290, max: 1100, default: 340 },
+  maxRows: { min: 2, max: 60, default: 24 },
+}
+export function layoutSettings(values: Partial<LayoutSettings> = {}): LayoutSettings {
+  const normalize = (key: keyof LayoutSettings) => {
+    const limit = LAYOUT_LIMITS[key]
+    const value = values[key]
+    return value !== undefined && Number.isFinite(value)
+      ? Math.max(limit.min, Math.min(limit.max, Math.round(value))) : limit.default
+  }
+  return { rowGap: normalize('rowGap'), columnGap: normalize('columnGap'), maxRows: normalize('maxRows') }
+}
 const clearance = 10
 
 export type PathCommand = ['M' | 'L', number, number] | ['Q', number, number, number, number]
@@ -43,7 +55,11 @@ function compact(points: Point[]): Point[] {
   return result
 }
 
-export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends: Record<string, number> = {}, previous?: Drawing): Drawing {
+export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends: Record<string, number> = {},
+  previous?: Drawing, settings?: LayoutSettings): Drawing {
+  const { rowGap, columnGap, maxRows } = layoutSettings(settings)
+  const row = NODE_HEIGHT + rowGap
+  const pitch = NODE_WIDTH + columnGap
   const positions: Record<string, Point> = Object.create(null)
   const routes: Record<string, Route> = Object.create(null)
   const labels = new Set<string>()
@@ -93,15 +109,21 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
   const hits = (p: Point, q: Point, center: Point, x: number, y: number) =>
     Math.min(p[0], q[0]) < center[0] + x && Math.max(p[0], q[0]) > center[0] - x
     && Math.min(p[1], q[1]) < center[1] + y && Math.max(p[1], q[1]) > center[1] - y
-  for (const [rank, column] of columns) {
+  let columnIndex = 0
+  for (const [, column] of [...columns].sort(([a], [b]) => a - b)) {
     column.sort((a, b) => (first.get(a) ?? Infinity) - (first.get(b) ?? Infinity) || a.localeCompare(b))
+    const lanes = Math.ceil(column.length / maxRows)
+    const rows = Math.ceil(column.length / lanes)
+    const slot = (index: number) => index + Math.floor(index / 8)
+    const center = Math.floor(slot(rows - 1) / 2)
     for (const [index, id] of column.entries()) {
       if (positions[id]) continue
-      const point: Point = [rank * COLUMN, (index - (column.length - 1) / 2) * ROW]
-      while (occupied.some(other => hits(point, point, other, NODE_WIDTH + clearance, NODE_HEIGHT + clearance))) point[1] += ROW
+      const point: Point = [(columnIndex + Math.floor(index / rows)) * pitch, (slot(index % rows) - center) * row]
+      while (occupied.some(other => hits(point, point, other, NODE_WIDTH + clearance, NODE_HEIGHT + clearance))) point[1] += row
       positions[id] = point
       occupied.push(point)
     }
+    columnIndex += lanes
   }
   const maxY = occupied.reduce((max, point) => Math.max(max, point[1]), 0)
   const minY = occupied.reduce((min, point) => Math.min(min, point[1]), 0)
@@ -152,10 +174,10 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
     let track: number = bend
     if (!selected) {
       const topFirst = exit[1] + entry[1] < minY + maxY
-      const preferred = Math.round((exit[1] + entry[1]) / (2 * ROW)) * ROW + ROW / 2
+      const preferred = Math.round((exit[1] + entry[1]) / (2 * row) - .5) * row + row / 2
       const local = [preferred, preferred - 8, preferred + 8, preferred - 16, preferred + 16]
       const perimeter = Array.from({ length: 24 }, (_, slot) => {
-        const offset = 72 + slot * 12
+        const offset = NODE_HEIGHT / 2 + 22 + slot * 12
         return topFirst ? [minY - offset, maxY + offset] : [maxY + offset, minY - offset]
       }).flat()
       if (flat && direct && manualOffset) local.unshift(exit[1])
@@ -177,7 +199,8 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
       }
     }
     const obstruction = !selected
-    const fallbackY = (exit[1] + entry[1] < 0 ? minY - 72 : maxY + 72) + (bends[edge.id] ?? 0)
+    const perimeterOffset = NODE_HEIGHT / 2 + 22
+    const fallbackY = (exit[1] + entry[1] < 0 ? minY - perimeterOffset : maxY + perimeterOffset) + (bends[edge.id] ?? 0)
     const points = compact(selected ?? (direct ? simple : [exit, [startLane, exit[1]], [startLane, fallbackY], [endLane, fallbackY], [endLane, entry[1]], entry]))
     const horizontal = points.slice(1).map((point, index) => ({ start: points[index], end: point }))
       .filter(segment => segment.start[1] === segment.end[1])

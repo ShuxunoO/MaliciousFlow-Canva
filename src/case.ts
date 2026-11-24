@@ -67,6 +67,8 @@ export interface CaseData {
 export interface Entity { id: string; name: string; members: string[] }
 export interface Relation { id: string; source: string; target: string; note: string }
 export interface Draft { id: string; text: string; refs: string[]; chapter?: string }
+export interface CanvasLayer { id: string; name: string; visible: boolean; refs: string[] }
+export interface LayoutSettings { rowGap: number; columnGap: number; maxRows: number }
 export interface Edits {
   title?: string
   names: Record<string, string>
@@ -78,6 +80,9 @@ export interface Edits {
   drafts: Draft[]
   included?: string[]
   conclusions?: Record<string, Conclusion>
+  layers?: CanvasLayer[]
+  showUnassigned?: boolean
+  layout?: LayoutSettings
 }
 
 export interface Filters { asset?: string; from?: string; to?: string; address?: string; core?: boolean; viewId?: string; includeContext?: boolean }
@@ -140,7 +145,7 @@ export function transact(previous: CaseData, incoming: Pick<CaseData, 'addresses
 }
 
 export function project(data: CaseData, edits: Edits, filters: Filters = {}, grouped = false,
-  hidden = new Set<string>(), reveal?: string): FlowView {
+  hidden = new Set<string>(), reveal?: string, soloLayer?: string): FlowView {
   const viewId = filters.viewId ?? (filters.core ? 'core' : 'all')
   const scope = viewId === 'core' ? data.views?.core ?? data.core : data.views?.[viewId]
   const core = scope ? new Set(scope) : undefined
@@ -159,17 +164,27 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
   const filterAddresses = filters.address ? new Set([filters.address,
     ...(edits.entities.find(entity => entity.id === filters.address)?.members ?? [])]) : undefined
   const included = new Set(edits.included ?? [])
+  const layers = edits.layers ?? []
+  const solo = layers.find(layer => layer.id === soloLayer)
+  const assigned = new Set(layers.flatMap(layer => layer.refs))
+  const allowed = new Set((solo ? [solo] : layers.filter(layer => layer.visible)).flatMap(layer => layer.refs))
+  const layerShows = (id: string) => allowed.has(id) || !solo && edits.showUnassigned !== false && !assigned.has(id)
   const groups = new Map<string, FlowEdge>()
   const visible = new Set<string>()
+  const scopedNodes = new Set<string>()
   const from = filters.from ? Date.parse(filters.from) : -Infinity
   const to = filters.to ? Date.parse(filters.to) : Infinity
   let count = 0
   for (const event of data.transfers) {
+    if (core?.has(event.id) || included.has(event.id)) {
+      scopedNodes.add(event.source)
+      scopedNodes.add(event.target)
+    }
     const source = mapping.get(event.source) ?? event.source
     const target = mapping.get(event.target) ?? event.target
     const forced = event.id === reveal || event.evidence === reveal && !!reveal
     const time = Date.parse(event.time)
-    if (!forced && ((core && !core.has(event.id) && !included.has(event.id)) || (filters.asset && event.assetId !== filters.asset)
+    if (!forced && (!layerShows(event.id) || (core && !core.has(event.id) && !included.has(event.id)) || (filters.asset && event.assetId !== filters.asset)
       || (filters.includeContext === false && event.context)
       || time < from || time >= to || (filterAddresses && ![event.source, event.target, source, target].some(id => filterAddresses.has(id)))
       || hidden.has(source + ':out') || hidden.has(target + ':in'))) continue
@@ -190,6 +205,7 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
     edge.amount = sumDecimal(edge.events.map(event => event.amount))
   }
   for (const relation of edits.relations) {
+    if (!layerShows(relation.id) && relation.id !== reveal) continue
     const source = mapping.get(relation.source) ?? relation.source
     const target = mapping.get(relation.target) ?? relation.target
     if (!nodes.has(source) || !nodes.has(target)) continue
@@ -200,15 +216,22 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
   }
   const connected = new Set(data.transfers.flatMap(item => [item.source, item.target]))
   if (!filters.asset && !filters.from && !filters.to && !filters.address) {
-    for (const node of data.addresses) if (!connected.has(node.id)) visible.add(mapping.get(node.id) ?? node.id)
+    for (const node of data.addresses) {
+      const standalone = !connected.has(node.id)
+      const inLayer = allowed.has(node.id) && (!core || scopedNodes.has(node.id))
+      if (layerShows(node.id) && (inLayer || standalone)) visible.add(mapping.get(node.id) ?? node.id)
+    }
   }
-  if (filters.address && nodes.has(filters.address)) visible.add(mapping.get(filters.address) ?? filters.address)
+  if (filters.address && nodes.has(filters.address) &&
+    (layerShows(filters.address) || nodes.get(filters.address)?.members?.some(layerShows))) {
+    visible.add(mapping.get(filters.address) ?? filters.address)
+  }
   for (const key of hidden) {
     const id = key.slice(0, key.lastIndexOf(':'))
-    if (nodes.has(id)) visible.add(id)
+    if (nodes.has(id) && (layerShows(id) || nodes.get(id)?.members?.some(layerShows))) visible.add(id)
   }
   for (const id of included) {
-    if (nodes.has(id) && (!filterAddresses || filterAddresses.has(id))) visible.add(mapping.get(id) ?? id)
+    if (nodes.has(id) && layerShows(id) && (!filterAddresses || filterAddresses.has(id))) visible.add(mapping.get(id) ?? id)
   }
   if (reveal && nodes.has(reveal)) visible.add(mapping.get(reveal) ?? reveal)
   return { nodes: [...visible].map(id => nodes.get(id)).filter((node): node is FlowNode => !!node), edges: [...groups.values()], count }
