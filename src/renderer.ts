@@ -265,7 +265,7 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
         states: selected?.id === edge.id ? ['selected'] : related ? ['related'] : [],
         style: {
           route, loop: false, stroke: color, opacity: focusing && !related ? .19 : 1,
-          lineWidth: parallel ? 1.45 : 1.55, increasedLineWidthForHitTesting: parallel ? 5 : 9,
+          lineWidth: parallel ? 1.45 : 1.55, increasedLineWidthForHitTesting: parallel?.compact ? 3 : parallel ? 5 : 9,
           lineDash: edge.events.length ? undefined : [6, 5], endArrow: true, endArrowType: 'triangle',
           endArrowFill: color, endArrowSize: parallel ? 6 : 10, cursor: 'pointer', labelAutoRotate: false,
           labelText: labels !== 'off' && showLabel ? label : undefined,

@@ -127,6 +127,18 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
   await expect(page.locator('#graph')).toHaveAttribute('data-edges', '2475')
   await expect(page.locator('#status')).toContainText('6,314 transfers')
   await savePainted('all', performance.now() - allStarted)
+  const compact = await page.evaluate(() => {
+    const drawing = (window as any).flowCanvas.renderedSnapshot()
+    const edges = drawing.edges.filter((edge: { source: string; target: string }) =>
+      edge.source.endsWith('e58258') && edge.target.endsWith('b4b8c23'))
+    return edges.map(({ points }: { points: number[][] }) => {
+      const ys = points.map(point => point[1])
+      const ends = [ys[0], ys.at(-1)!]
+      return Math.max(Math.min(...ends) - Math.min(...ys), Math.max(...ys) - Math.max(...ends))
+    })
+  })
+  expect(compact).toHaveLength(123)
+  expect(Math.max(...compact)).toBeLessThan(900)
   const full = await inspectPaths()
   expect(full).toMatchObject({ brokenAnchors: 0, blocked: 0 })
   const filterStarted = performance.now()
@@ -136,6 +148,13 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
   await page.getByRole('button', { name: 'Reset filters' }).click()
   await expect(page.locator('#graph')).toHaveAttribute('data-edges', '2475', { timeout: 45_000 })
   writeFileSync(test.info().outputPath('kucoin-timings.json'), JSON.stringify(timings, null, 2))
+  await page.evaluate(() => (window as any).maliciousFlow.set_view('E-1-1-0006'))
+  await expect(page.getByRole('button', { name: 'Evidence E-1-1-0006' })).toBeVisible()
+  await page.getByRole('button', { name: 'Focus address pair' }).click()
+  await expect(page.locator('#graph')).toHaveAttribute('data-edges', '123')
+  await expect.poll(() => page.evaluate(() => (window as any).flowCanvas.renderedSnapshot().labels.length)).toBe(123)
+  await page.getByRole('button', { name: 'Exit pair view' }).click()
+  await expect(page.locator('#graph')).toHaveAttribute('data-edges', '2475')
   await page.getByRole('searchbox').fill('E-6-1-0001')
   await page.locator('#results button').first().click()
   await expect(page.getByRole('heading', { name: 'Transaction details' })).toBeVisible({ timeout: 30_000 })

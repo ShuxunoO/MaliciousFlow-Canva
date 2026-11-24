@@ -1,5 +1,5 @@
 import type { FlowView, LayoutSettings, Point } from './case'
-import { parallelPath, parallelTracks, PARALLEL_TRACK_GAP } from './parallel-routing'
+import { parallelPath, parallelTracks } from './parallel-routing'
 
 export const NODE_WIDTH = 320
 export const NODE_HEIGHT = 128
@@ -21,7 +21,7 @@ const clearance = 10
 
 export type PathCommand = ['M' | 'L', number, number] | ['Q', number, number, number, number]
 export interface Route { points: Point[]; label: Point; handle: Point; handleAxis: 'x' | 'y'; offset: number; path: [['M', number, number], ...PathCommand[]]; blocked: boolean;
-  parallel?: { labelWidth: number } }
+  parallel?: { labelWidth: number; compact: boolean } }
 export interface Drawing { positions: Record<string, Point>; routes: Record<string, Route>; labels: Set<string> }
 
 export function rounded(points: Point[], radius = 24): Route['path'] {
@@ -58,7 +58,7 @@ function compact(points: Point[]): Point[] {
 }
 
 export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends: Record<string, number> = {},
-  previous?: Drawing, settings?: LayoutSettings): Drawing {
+  previous?: Drawing, settings?: LayoutSettings, parallelDetail = false): Drawing {
   const { rowGap, columnGap, maxRows } = layoutSettings(settings)
   const row = NODE_HEIGHT + rowGap
   const pitch = NODE_WIDTH + columnGap
@@ -135,7 +135,7 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
     (a.events[0] ? Date.parse(a.events[0].time) : Infinity) - (b.events[0] ? Date.parse(b.events[0].time) : Infinity) ||
     a.id.localeCompare(b.id)
   const edges = [...view.edges].sort(chronological)
-  const tracks = parallelTracks(edges, positions)
+  const tracks = parallelTracks(edges, positions, parallelDetail)
   const edgeById = new Map(edges.map(edge => [edge.id, edge]))
   for (const edge of edges) {
     if (!outgoing.has(edge.source)) outgoing.set(edge.source, [])
@@ -152,7 +152,7 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
   const portOffset = (ids: string[], id: string) => ids.length < 2 ? 0 : (ids.indexOf(id) / (ids.length - 1) - .5) * 64
   const labelBoxes: { point: Point; halfWidth: number }[] = []
   const horizontalUse = new Map<number, number>()
-  const parallelRails: { y: number; left: number; right: number }[] = []
+  const parallelRails: { y: number; left: number; right: number; gap: number }[] = []
   const laneDistance = (ids: string[], id: string) => 32 + (ids.indexOf(id) / Math.max(1, ids.length - 1)) * 96
   const blocked = (p: Point, q: Point) => occupied.some(point => hits(p, q, point, NODE_WIDTH / 2 + clearance, NODE_HEIGHT / 2 + clearance))
   for (const edge of [...edges.filter(item => tracks.has(item.id)), ...edges.filter(item => !tracks.has(item.id))]) {
@@ -181,14 +181,14 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
       const inset = Math.min(66, span * .25)
       const expected = parallel.y + manualOffset
       const base = [expected]
-      for (let slot = 1; slot <= 5; slot++) {
-        base.push(expected - slot * PARALLEL_TRACK_GAP, expected + slot * PARALLEL_TRACK_GAP)
+      for (let slot = 1; slot <= Math.ceil(row * 2 / parallel.gap); slot++) {
+        base.push(expected - slot * parallel.gap, expected + slot * parallel.gap)
       }
       const extern = NODE_HEIGHT / 2 + 28
       const above = Math.min(expected, minY - extern)
       const below = Math.max(expected, maxY + extern)
       for (let slot = 0; slot < parallel.count + 2; slot++) {
-        base.push(above - slot * PARALLEL_TRACK_GAP, below + slot * PARALLEL_TRACK_GAP)
+        base.push(above - slot * parallel.gap, below + slot * parallel.gap)
       }
       for (const y of base) {
         const forward: [Point, Point, Point, Point, Point, Point] = [exit,
@@ -199,11 +199,11 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
         const left = Math.min(lane[2][0], lane[3][0])
         const right = Math.max(lane[2][0], lane[3][0])
         if ((!smooth && !avoids(lane)) || parallelRails.some(rail =>
-          rail.left < right && rail.right > left && Math.abs(y - rail.y) < PARALLEL_TRACK_GAP - .01)) continue
+          rail.left < right && rail.right > left && Math.abs(y - rail.y) < Math.max(rail.gap, parallel.gap) - .01)) continue
         const center: Point = [(left + right) / 2, y]
         const label: Point = [center[0], y - 12]
         const labelWidth = Math.min(280, right - left - (smooth ? 12 : 50))
-        if (labelWidth >= 76 && !occupied.some(other =>
+        if (!parallel.compact && labelWidth >= 76 && !occupied.some(other =>
           hits(label, label, other, NODE_WIDTH / 2 + labelWidth / 2, NODE_HEIGHT / 2 + 11)) &&
           !labelBoxes.some(other => hits(label, label, other.point, labelWidth / 2 + other.halfWidth + 4, 22))) {
           labelBoxes.push({ point: label, halfWidth: labelWidth / 2 })
@@ -212,8 +212,8 @@ export function layout(view: FlowView, fixed: Record<string, Point> = {}, bends:
         const points = compact(lane)
         routes[edge.id] = { points, label, handle: center, handleAxis: 'y', offset: manualOffset,
           path: smooth ? parallelPath(forward) : rounded(points), blocked: false,
-          parallel: { labelWidth: Math.max(76, labelWidth) } }
-        parallelRails.push({ y, left, right })
+          parallel: { labelWidth: Math.max(76, labelWidth), compact: parallel.compact } }
+        parallelRails.push({ y, left, right, gap: parallel.gap })
         horizontalUse.set(y, (horizontalUse.get(y) ?? 0) + 1)
         break
       }

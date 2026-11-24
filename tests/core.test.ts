@@ -116,6 +116,22 @@ describe('layout', () => {
     const moved = layout(view, fixed, { 'origin-0': -25 })
     expect(moved.routes['origin-0'].handle[1]).toBe(trackYs[0] - 25)
   })
+
+  it('keeps dense corridors close to their endpoints and expands every line in a focused view', () => {
+    const edges = Array.from({ length: 60 }, (_, index) => ({
+      id: 'asset-' + index, source: 'origin', target: 'relay',
+      events: [{ ...demo.transfers[0], time: new Date(Date.UTC(2020, 1, 1, 0, index)).toISOString() }],
+    }))
+    const view = { nodes: demo.addresses.slice(0, 2), edges, count: edges.length }
+    const overview = layout(view)
+    const detail = layout(view, {}, {}, undefined, undefined, true)
+    const overviewTracks = edges.map(edge => overview.routes[edge.id].handle[1])
+    expect(new Set(overviewTracks).size).toBe(60)
+    expect(Math.max(...overviewTracks) - Math.min(...overviewTracks)).toBe(59 * 7)
+    expect(overview.labels.size).toBe(0)
+    expect(detail.labels.size).toBe(60)
+    expect(detail.routes['asset-59'].handle[1] - detail.routes['asset-0'].handle[1]).toBe(59 * 34)
+  })
 })
 
 it('restores both undo and redo history from a serialized case edit snapshot', () => {

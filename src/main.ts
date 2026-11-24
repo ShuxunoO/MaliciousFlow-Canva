@@ -228,7 +228,7 @@ function render(fit = false, focus?: string, refreshInspector = true): Promise<v
     if (refreshInspector) $('selection').hidden = !showInspector
     resizeGraph()
     drawing = layout(view, keepPositions ? { ...drawing.positions, ...history.value.positions } : history.value.positions,
-      history.value.bends, keepPositions ? drawing : undefined, history.value.layout)
+      history.value.bends, keepPositions ? drawing : undefined, history.value.layout, !!filters.pair)
     keepPositions = false
     assetsByNode = nodeAssets(data, view, filters.to)
     graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection, edgeLabels, boxed, !!filters.pair))

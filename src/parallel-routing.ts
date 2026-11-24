@@ -2,11 +2,13 @@ import type { FlowEdge, Point } from './case'
 import type { Route } from './layout'
 
 export const PARALLEL_TRACK_GAP = 34
+const COMPACT_TRACK_GAP = 7
+const DENSE_CORRIDOR_SIZE = 32
 
-export interface ParallelTrack { y: number; count: number }
+export interface ParallelTrack { y: number; count: number; gap: number; compact: boolean }
 
 /** Ordinal within a pair follows ledger time. Pairs sharing a corridor are packed in port order. */
-export function parallelTracks(edges: FlowEdge[], positions: Record<string, Point>): Map<string, ParallelTrack> {
+export function parallelTracks(edges: FlowEdge[], positions: Record<string, Point>, detail: boolean): Map<string, ParallelTrack> {
   const pairs = new Map<string, FlowEdge[]>()
   for (const edge of edges) {
     const key = JSON.stringify([edge.source, edge.target])
@@ -25,26 +27,28 @@ export function parallelTracks(edges: FlowEdge[], positions: Record<string, Poin
   }
   const tracks = new Map<string, ParallelTrack>()
   for (const corridor of corridors.values()) {
+    const compact = !detail && corridor.reduce((count, pair) => count + pair.length, 0) > DENSE_CORRIDOR_SIZE
+    const gap = compact ? COMPACT_TRACK_GAP : PARALLEL_TRACK_GAP
     const center = (pair: FlowEdge[]) => (positions[pair[0].source][1] + positions[pair[0].target][1]) / 2
     corridor.sort((left, right) => center(left) - center(right) || left[0].id.localeCompare(right[0].id))
     // Pack upwards and downwards around each pair's closest natural center without overlapping neighboring pairs.
     const starts: number[] = []
     let cursor = -Infinity
     for (const pair of corridor) {
-      const first = Math.max(cursor, center(pair) - (pair.length - 1) * PARALLEL_TRACK_GAP / 2)
+      const first = Math.max(cursor, center(pair) - (pair.length - 1) * gap / 2)
       starts.push(first)
-      cursor = first + (pair.length + 1) * PARALLEL_TRACK_GAP
+      cursor = first + (pair.length + 1) * gap
     }
-    const desired = center(corridor.at(-1)!) - (corridor.at(-1)!.length - 1) * PARALLEL_TRACK_GAP / 2
+    const desired = center(corridor.at(-1)!) - (corridor.at(-1)!.length - 1) * gap / 2
     let shift = Math.max(0, (starts.at(-1)! - desired) / 2)
     for (const [pairIndex, pair] of corridor.entries()) {
       const start = starts[pairIndex] - shift
       for (const [index, edge] of pair.entries()) {
-        tracks.set(edge.id, { y: start + index * PARALLEL_TRACK_GAP, count: pair.length })
+        tracks.set(edge.id, { y: start + index * gap, count: pair.length, gap, compact })
       }
       const following = corridor[pairIndex + 1]
       if (following) {
-        const unused = starts[pairIndex + 1] - starts[pairIndex] - (pair.length + 1) * PARALLEL_TRACK_GAP
+        const unused = starts[pairIndex + 1] - starts[pairIndex] - (pair.length + 1) * gap
         shift = Math.max(0, shift - unused)
       }
     }
