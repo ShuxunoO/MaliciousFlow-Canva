@@ -85,7 +85,7 @@ export interface Edits {
   layout?: LayoutSettings
 }
 
-export interface Filters { asset?: string; from?: string; to?: string; address?: string; core?: boolean; viewId?: string; includeContext?: boolean }
+export interface Filters { asset?: string; from?: string; to?: string; address?: string; core?: boolean; viewId?: string; includeContext?: boolean; pair?: [string, string] }
 export interface FlowNode extends Address { members?: string[] }
 export interface FlowEdge {
   id: string
@@ -163,6 +163,9 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
   }
   const filterAddresses = filters.address ? new Set([filters.address,
     ...(edits.entities.find(entity => entity.id === filters.address)?.members ?? [])]) : undefined
+  const pair = filters.pair?.map(id => mapping.get(id) ?? id)
+  const matchesPair = (source: string, target: string) => !pair ||
+    source === pair[0] && target === pair[1] || source === pair[1] && target === pair[0]
   const included = new Set(edits.included ?? [])
   const layers = edits.layers ?? []
   const solo = layers.find(layer => layer.id === soloLayer)
@@ -184,7 +187,7 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
     const target = mapping.get(event.target) ?? event.target
     const forced = event.id === reveal || event.evidence === reveal && !!reveal
     const time = Date.parse(event.time)
-    if (!forced && (!layerShows(event.id) || (core && !core.has(event.id) && !included.has(event.id)) || (filters.asset && event.assetId !== filters.asset)
+    if (!forced && (!matchesPair(source, target) || !layerShows(event.id) || (core && !core.has(event.id) && !included.has(event.id)) || (filters.asset && event.assetId !== filters.asset)
       || (filters.includeContext === false && event.context)
       || time < from || time >= to || (filterAddresses && ![event.source, event.target, source, target].some(id => filterAddresses.has(id)))
       || hidden.has(source + ':out') || hidden.has(target + ':in'))) continue
@@ -209,6 +212,7 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
     const source = mapping.get(relation.source) ?? relation.source
     const target = mapping.get(relation.target) ?? relation.target
     if (!nodes.has(source) || !nodes.has(target)) continue
+    if (!matchesPair(source, target) && relation.id !== reveal) continue
     if (filterAddresses && ![relation.source, relation.target, source, target].some(id => filterAddresses.has(id))) continue
     visible.add(source)
     visible.add(target)
@@ -234,6 +238,10 @@ export function project(data: CaseData, edits: Edits, filters: Filters = {}, gro
     if (nodes.has(id) && layerShows(id) && (!filterAddresses || filterAddresses.has(id))) visible.add(mapping.get(id) ?? id)
   }
   if (reveal && nodes.has(reveal)) visible.add(mapping.get(reveal) ?? reveal)
+  if (pair) {
+    const pairVisible = new Set([...pair, ...Array.from(groups.values()).flatMap(edge => [edge.source, edge.target])])
+    for (const id of visible) if (id !== reveal && !pairVisible.has(id)) visible.delete(id)
+  }
   return { nodes: [...visible].map(id => nodes.get(id)).filter((node): node is FlowNode => !!node), edges: [...groups.values()], count }
 }
 

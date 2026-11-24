@@ -93,6 +93,29 @@ describe('layout', () => {
     expect(drawing.positions['01'][1] - drawing.positions['00'][1]).toBe(pitch)
     expect(drawing.positions['08'][1] - drawing.positions['07'][1]).toBe(2 * pitch)
   })
+
+  it('gives both sets of parallel edges independent tracks in a shared corridor', () => {
+    const nodes = [demo.addresses[0], demo.addresses[2], demo.addresses[1]]
+    const edges = [nodes[0], nodes[1]].flatMap(node => Array.from({ length: 10 }, (_, index) => ({
+      id: node.id + '-' + index, source: node.id, target: 'relay',
+      events: [{ ...demo.transfers[0], time: new Date(Date.UTC(2020, 1, 1, 0, index)).toISOString() }],
+    })))
+    const fixed: Record<string, [number, number]> = { origin: [0, -140], alpha: [0, 140], relay: [660, 0] }
+    const view = { nodes, edges, count: edges.length }
+    const drawing = layout(view, fixed)
+    const trackYs = edges.map(edge => drawing.routes[edge.id].handle[1])
+    expect(trackYs.slice(1).every((y, index) => y - trackYs[index] >= 34)).toBe(true)
+    expect(drawing.labels.size).toBe(20)
+    for (const edge of edges) {
+      const route = drawing.routes[edge.id]
+      expect(route.blocked).toBe(false)
+      expect(route.path.filter(command => command[0] === 'Q')).toHaveLength(4)
+      expect(route.points[0][0]).toBe(160)
+      expect(route.points.at(-1)?.[0]).toBe(500)
+    }
+    const moved = layout(view, fixed, { 'origin-0': -25 })
+    expect(moved.routes['origin-0'].handle[1]).toBe(trackYs[0] - 25)
+  })
 })
 
 it('restores both undo and redo history from a serialized case edit snapshot', () => {

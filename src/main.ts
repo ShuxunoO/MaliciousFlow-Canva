@@ -41,6 +41,7 @@ app.innerHTML = `
         <button id="box-select" aria-pressed="false">Box select</button>
         <button id="layout-toggle" aria-expanded="false" aria-controls="layout-panel">Layout</button>
         <button id="layers-toggle" aria-expanded="false" aria-controls="layers-panel">Layers</button>
+        <button id="exit-pair" hidden>Exit pair view</button>
       </div>
       <div class="canvas-body">
         <aside id="scope-panel" aria-label="Network scope" hidden>
@@ -230,7 +231,7 @@ function render(fit = false, focus?: string, refreshInspector = true): Promise<v
       history.value.bends, keepPositions ? drawing : undefined, history.value.layout)
     keepPositions = false
     assetsByNode = nodeAssets(data, view, filters.to)
-    graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection, edgeLabels, boxed))
+    graph.setData(graphData(view, drawing, history.value, assetsByNode, hidden, selection, edgeLabels, boxed, !!filters.pair))
     await graph.render()
     if (beforeResize && anchor) {
       const [x, y] = graph.getClientByCanvas(anchor)
@@ -240,12 +241,14 @@ function render(fit = false, focus?: string, refreshInspector = true): Promise<v
     }
     if (fit && view.nodes.length) await graph.fitView()
     if (focus) {
-      if (graph.getZoom() < .62) await graph.zoomTo(.62)
+      const readingZoom = filters.pair ? .9 : .62
+      if (graph.getZoom() < readingZoom) await graph.zoomTo(readingZoom)
       await graph.focusElement(focus)
     }
     $('empty').hidden = !!view.nodes.length
     $('graph').dataset.nodes = String(view.nodes.length)
     $('graph').dataset.edges = String(view.edges.length)
+    $('exit-pair').hidden = !filters.pair
     const count = (total: number, word: string) => total.toLocaleString('en-US') + ' ' + word + (total === 1 ? '' : 's')
     status([count(view.nodes.length, 'node'), count(view.edges.length, 'edge'), count(view.count, 'transfer')].join(' · '))
     if (refreshInspector) renderSelection()
@@ -457,6 +460,7 @@ function renderSelection() {
       <div>${esc(view.nodes.find(node => node.id === edge.source)?.name)} → ${esc(view.nodes.find(node => node.id === edge.target)?.name)}</div>
       ${edge.asset ? `<div class="subtle">${esc(edge.amount)} ${esc(edge.asset)} · ${edge.events.length} transfers<br>USD ${esc(usd)}</div>` : ''}
       <label>Edge note<textarea data-note="${esc(edge.id)}">${esc(history.value.notes[edge.id] ?? edge.note)}</textarea></label>
+      ${!filters.pair && edge.source !== edge.target ? '<button data-focus-pair>Focus address pair</button>' : ''}
       <button data-open-layers>Add to layer</button>
       ${eventRows(edge.events)}</div>`
   }
@@ -821,7 +825,13 @@ $('reset').onclick = () => {
   $('results').hidden = true
   $<HTMLInputElement>('include-context').checked = true
   hidden.clear()
+  delete filters.pair
   applyFilters()
+}
+$('exit-pair').onclick = () => {
+  delete filters.pair
+  revealed = undefined
+  void render(true)
 }
 $('demo').onclick = () => {
   openedByUser = true
@@ -897,6 +907,7 @@ $('undo').onclick = () => { history.undo(); restore() }
 $('redo').onclick = () => { history.redo(); restore() }
 $('grouped').onclick = () => {
   grouped = !grouped
+  delete filters.pair
   $('grouped').setAttribute('aria-pressed', String(grouped))
   void render(true)
 }
@@ -1002,10 +1013,21 @@ document.addEventListener('click', event => {
     toggleBranch(selection.id, button.dataset.direction === 'in' ? 'in' : 'out')
   }
   if (button.hasAttribute('data-neighbors') && selection) {
+    delete filters.pair
     filters.address = selection.id
     $<HTMLSelectElement>('address-filter').value = selection.id
     revealed = undefined
     void render(true)
+  }
+  if (button.hasAttribute('data-focus-pair') && selection?.type === 'edge') {
+    const edge = view.edges.find(item => item.id === selection?.id)
+    if (edge) {
+      const siblings = view.edges.filter(item =>
+        item.source === edge.source && item.target === edge.target || item.source === edge.target && item.target === edge.source)
+      filters.pair = [edge.source, edge.target]
+      revealed = undefined
+      void (siblings.length <= 24 ? render(true) : render(false, edge.id))
+    }
   }
   if (button.hasAttribute('data-group') && selection) {
     const name = prompt('Entity name')?.trim()
@@ -1370,6 +1392,7 @@ Object.assign(window, {
           syncScopes()
         }
         if (input.grouped !== undefined) {
+          if (grouped !== input.grouped && !input.filters) delete filters.pair
           grouped = input.grouped
           $('grouped').setAttribute('aria-pressed', String(grouped))
         }
@@ -1511,6 +1534,7 @@ function inspectDrawing() {
 }
 
 if (import.meta.env.DEV) Object.assign(window, { flowCanvas: { canvasCoordinates, inspectDrawing,
+  transactionHandlePoint: (id: string) => graph.getClientByCanvas(drawing.routes[id].handle),
   nodeActionPoint: (id: string, offset: Point) => graph.getClientByCanvas([
     drawing.positions[id][0] + offset[0], drawing.positions[id][1] + offset[1],
   ]),

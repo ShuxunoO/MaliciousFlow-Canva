@@ -63,10 +63,35 @@ test('imports and reconciles the local KuCoin case in core and full views', asyn
     })
   }
   await savePainted('core', performance.now() - importStarted)
+  const inbound = await page.evaluate(() => {
+    const drawing = (window as any).flowCanvas.renderedSnapshot()
+    const edges = drawing.edges.filter((edge: { source: string; target: string }) =>
+      (edge.source.endsWith('e58258') || edge.source.endsWith('f9769c')) && edge.target.endsWith('b4b8c23'))
+    const labels = new Set(drawing.labels.map((label: { edge: string }) => label.edge))
+    return edges.map((edge: { id: string; data: { asset: string }; points: number[][] }) => ({
+      label: labels.has(edge.id), id: edge.id, asset: edge.data.asset,
+      y: edge.points.find(([x, y], index) => edge.points[index + 1]?.[0] - x > 130 && edge.points[index + 1]?.[1] === y)?.[1],
+    }))
+  })
+  expect(inbound).toHaveLength(20)
+  expect(inbound.every((item: { label: boolean; y?: number }) => item.label && item.y !== undefined)).toBe(true)
+  expect(new Set(inbound.map((item: { y: number }) => item.y)).size).toBe(20)
   const core = await inspectPaths()
   expect(core).toMatchObject({ brokenAnchors: 0, blocked: 0 })
   expect(core.curves).toBeGreaterThan(0)
   await page.screenshot({ path: test.info().outputPath('kucoin-core.png') })
+  await page.evaluate(id => (window as any).maliciousFlow.set_view(id), inbound[0].id)
+  await page.getByRole('button', { name: 'Focus address pair' }).click()
+  await expect(page.locator('#graph')).toHaveAttribute('data-edges', '10')
+  await expect(page.locator('#graph')).toHaveAttribute('data-nodes', '2')
+  const clicked = inbound.find((item: { id: string }) => item.id !== inbound[0].id &&
+    item.id.includes('e58258') === inbound[0].id.includes('e58258'))
+  const rail = await page.evaluate(id => (window as any).flowCanvas.transactionHandlePoint(id), clicked.id)
+  await page.mouse.click(rail[0], rail[1])
+  await expect(page.locator('#selection')).toContainText(clicked.asset)
+  await page.getByRole('button', { name: 'Exit pair view' }).click()
+  await expect(page.locator('#graph')).toHaveAttribute('data-edges', '285')
+  await page.getByRole('button', { name: 'Close details' }).click()
   const scopes = page.getByRole('complementary', { name: 'Network scope' })
   await expect(scopes.getByRole('button', { name: /Core paths/ })).toHaveAttribute('aria-pressed', 'true')
   await expect(scopes.locator('.scope-batches button')).toHaveCount(8)

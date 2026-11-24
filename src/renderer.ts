@@ -92,7 +92,9 @@ class TransactionEdge extends BaseEdge {
     const style = super.getLabelStyle(attributes)
     if (!style) return false
     const [x, y] = attributes.route.label
-    return { ...style, x, y, transform: [], textAlign: 'center' as const, textBaseline: 'middle' as const }
+    const parallel = attributes.route.parallel
+    return { ...style, x, y, transform: [], textAlign: 'center' as const, textBaseline: 'middle' as const,
+      ...(parallel ? { wordWrap: true, wordWrapWidth: parallel.labelWidth - 8, maxLines: 1, textOverflow: 'ellipsis' } : {}) }
   }
 }
 
@@ -182,8 +184,21 @@ function truncate(text: string, length: number) {
 
 export type EdgeLabels = 'auto' | 'on' | 'off'
 
+const assetColors = new Map([
+  ['ETH', '#84b1ff'], ['USDT', '#6ce3ca'], ['USDC', '#8ee3ff'], ['LINK', '#a4a5ff'], ['DAI', '#ffd078'],
+])
+const otherColors = ['#b4d7ec', '#f0a7b4', '#b4dec2', '#cab4ea', '#ecc2a2', '#c5cc91', '#a6c5df', '#c5bbc8']
+
+function edgeColor(asset?: string, assetId = '') {
+  if (!asset) return '#baba83'
+  const base = assetColors.get(asset.toUpperCase())
+  if (base) return base
+  const hash = Array.from(assetId || asset).reduce((value, char) => Math.imul(value, 31) + char.charCodeAt(0) | 0, 0)
+  return otherColors[(hash >>> 0) % otherColors.length]
+}
+
 export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets: Map<string, NodeAsset[]>,
-  hidden: Set<string>, selected?: Selection, labels: EdgeLabels = 'auto', boxed = new Set<string>()): GraphData {
+  hidden: Set<string>, selected?: Selection, labels: EdgeLabels = 'auto', boxed = new Set<string>(), pairFocused = false): GraphData {
   const showAllLabels = labels === 'on' || labels === 'auto' && view.edges.length < 190
   const primary = new Set(boxed)
   if (selected?.type === 'node') primary.add(selected.id)
@@ -196,7 +211,7 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
     relatedNodes.add(edge.source)
     relatedNodes.add(edge.target)
   }
-  const focusing = !!(primary.size || selected)
+  const focusing = !pairFocused && !!(primary.size || selected)
   return {
     nodes: view.nodes.map(node => {
       const [x, y] = drawing.positions[node.id]
@@ -229,21 +244,31 @@ export function graphData(view: FlowView, drawing: Drawing, edits: Edits, assets
       const last = edge.events.at(-1)
       const time = first ? first.time.slice(0, first === last ? 19 : 10).replace('T', ' ') : ''
       const period = first !== last && last ? time + ' → ' + last.time.slice(0, 10) : time
-      const color = edge.asset === 'ETH' ? '#76a6f8' : edge.events.length ? '#66cbb6' : '#baba83'
+      const color = edgeColor(edge.asset, first?.assetId)
       const related = relatedEdges.has(edge.id)
+      const parallel = route.parallel
+      const showLabel = selected?.id === edge.id || drawing.labels.has(edge.id) && (showAllLabels || !!parallel)
+      const compactPeriod = !first || !last || first === last ? time.slice(5)
+        : first.time.slice(0, 10) === last.time.slice(0, 10)
+          ? first.time.slice(5, 16).replace('T', ' ') + '→' + last.time.slice(11, 16)
+          : first.time.slice(0, 10) + '–' + last.time.slice(5, 10)
+      const amount = edge.amount ?? ''
+      const label = first ? (parallel
+        ? [compactPeriod, (amount.length <= 10 ? amount : compactQuantity([amount])) + ' ' + edge.asset,
+          ...(edge.events.length > 1 ? ['×' + edge.events.length] : [])].join(' · ')
+        : [period + ' UTC', amount + ' ' + edge.asset,
+          ...(edge.events.length > 1 ? [edge.events.length + ' transfers'] : [])].join('  · ')
+          + (edits.notes[edge.id] ? '  ·  ' + truncate(edits.notes[edge.id], 24) : ''))
+        : edits.notes[edge.id] ?? edge.note
       return {
         id: edge.id, type: 'transaction-path', source: edge.source, target: edge.target,
         states: selected?.id === edge.id ? ['selected'] : related ? ['related'] : [],
         style: {
           route, loop: false, stroke: color, opacity: focusing && !related ? .19 : 1,
-          lineWidth: 1.55, increasedLineWidthForHitTesting: 9,
+          lineWidth: parallel ? 1.45 : 1.55, increasedLineWidthForHitTesting: parallel ? 5 : 9,
           lineDash: edge.events.length ? undefined : [6, 5], endArrow: true, endArrowType: 'triangle',
-          endArrowFill: color, endArrowSize: 10, cursor: 'pointer', labelAutoRotate: false,
-          labelText: (showAllLabels && drawing.labels.has(edge.id)) || (labels !== 'off' && selected?.id === edge.id)
-            ? (first ? [period + ' UTC', edge.amount + ' ' + edge.asset,
-              ...(edge.events.length > 1 ? [edge.events.length + ' transfers'] : [])].join('  ·  ') : edits.notes[edge.id] ?? edge.note)
-              + (edge.events.length && edits.notes[edge.id] ? '  ·  ' + truncate(edits.notes[edge.id], 24) : '')
-            : undefined,
+          endArrowFill: color, endArrowSize: parallel ? 6 : 10, cursor: 'pointer', labelAutoRotate: false,
+          labelText: labels !== 'off' && showLabel ? label : undefined,
           labelFontSize: 10, labelFill: '#d7e5ef', labelBackground: true, labelBackgroundFill: '#111d26',
           labelPadding: [3, 4], labelBackgroundRadius: 3,
         },

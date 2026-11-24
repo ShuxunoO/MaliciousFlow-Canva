@@ -30,6 +30,7 @@ A reference can be an address ID, entity ID, graph edge ID, transaction event ID
 - For KuCoin, `viewId` accepts `all`, `core`, `original`, `return`, or `batch-D1` through `batch-D8`. Omit `viewId` to select the full network, or pass `core: true` to open the core view.
 - `edgeLabels` accepts `auto`, `on`, or `off` and is returned by `set_view`. Automatic mode shows persistent labels on smaller graphs. The on setting uses the available label positions from the router.
 - `grouped` turns entity aggregation on or off. `branch` accepts `{ id, direction: 'in' | 'out', collapsed }`.
+- Set `filters.pair: [addressIdA, addressIdB]` to show transfers between two visible nodes in both directions. This filter combines with scope, asset, time, and layer visibility. Use graph entity IDs for nodes in the grouped view.
 - `fit` fits visible nodes to the canvas. `zoom` sets the zoom factor and `pan: [dx, dy]` translates the viewport.
 
 ### Canvas edits
